@@ -8,6 +8,8 @@ from typing import Dict, Any, List, Optional, Tuple
 import requests
 from flask import Flask, render_template_string, request
 from pdfminer.high_level import extract_text
+from pdfminer.layout import LAParams
+from pdfminer.pdfpage import PDFPage
 
 app = Flask(__name__)
 
@@ -70,8 +72,26 @@ def _split_authors(authors_full: str) -> list[dict[str, str]]:
         out.append({"name": name, "orders": orders, "exists": exists})
     return out
 
+def _extract_first_page_text(pdf_file) -> str:
+    """Extract text from first page only"""
+    try:
+        # Extract only first page
+        first_page = next(PDFPage.get_pages(pdf_file, maxpages=1))
+        laparams = LAParams()
+        text = extract_text(pdf_file, page_numbers=[0], laparams=laparams)
+        return text
+    except:
+        # Fallback to full document if first page extraction fails
+        return extract_text(pdf_file)
+
 def _detect_format(text: str) -> str:
-    """Detect PDF format (2022, 2023, or 2024) based on content patterns - ENHANCED"""
+    """Detect PDF format (2022, 2023, 2024, 2025) based on content patterns"""
+    
+    # Check for 2025 format - HTTPS DOI with specific 2025 pattern
+    if re.search(r"https://doi\.org/10\.55453/rjmm\.2025\.", text, re.I):
+        print("🔧 Detected 2025 format based on DOI pattern")
+        return "2025"
+    
     # Check for 2022 format indicators
     if re.search(r"doi:\s*\d", text, re.I):
         return "2022"
@@ -84,9 +104,9 @@ def _detect_format(text: str) -> str:
         else:
             return "2023"
     
-    # ENHANCED: Check for 2022 format without DOI but with specific date pattern
+    # Check for 2022 format without DOI but with specific date pattern
     if re.search(r"The article was received on [^,]+, \d{4}, and accepted for publishing on [^.]+\.", text, re.I):
-        print("🔧 ENHANCED: Detected 2022 format without DOI based on date pattern")
+        print("🔧 Detected 2022 format without DOI based on date pattern")
         return "2022"
     
     # Default to 2024 (no header, https DOI)
@@ -94,7 +114,7 @@ def _detect_format(text: str) -> str:
 
 def _extract_doi_universal(text: str) -> str:
     """Extract DOI from any format and normalize to full URL"""
-    # Try 2023/2024 format first (full URL)
+    # Try 2025/2023/2024 format first (full URL)
     doi_match = re.search(r"(https?://doi\.org/\S+)", text, re.I)
     if doi_match:
         return doi_match.group(1).strip()
@@ -108,8 +128,8 @@ def _extract_doi_universal(text: str) -> str:
     return ""
 
 def _split_content_universal(text: str) -> str:
-    """Split content after DOI for any format - COMPLETELY REWRITTEN"""
-    # Try 2023/2024 format first (https://doi.org/)
+    """Split content after DOI for any format"""
+    # Try 2025/2023/2024 format first (https://doi.org/)
     parts = re.split(r"https?://doi\.org/\S+\s*", text, maxsplit=1, flags=re.I)
     if len(parts) > 1:
         print("🔧 Split after HTTPS DOI")
@@ -125,27 +145,55 @@ def _split_content_universal(text: str) -> str:
             print("🔧 Split after DOI prefix (early in document)")
             return parts[1]
     
-    # COMPLETELY NEW: For 2022 PDFs without DOI, don't split at all
-    # Just return the original text - we'll handle the parsing differently
+    # For 2022 PDFs without DOI, don't split at all
     print("🔧 No DOI found - returning full text for 2022 format parsing")
     return text
 
 def _parse_dates_flexible(text: str) -> Dict[str, str]:
-    """Parse dates from all template formats"""
+    """Parse dates from all template formats - ENHANCED FOR 2025"""
     dates = {"received": "", "revised": "", "accepted": ""}
     
-    # Universal pattern for all formats
-    date_pattern = r"(?:The\s+)?article was received on ([^,]+(?:, \d{4})?),?\s*(?:revised on ([^,]+),\s*)?and accepted for publishing on ([^.]+)\."
-    match = re.search(date_pattern, text, re.I)
+    # Enhanced patterns for 2025 format
+    date_patterns = [
+        # 2025 separate lines format: "Received: 21 June 2025" "Revised: 17 August 2025" "Accepted: 28 August 2025"
+        r"Received:\s*([^\n\r]+).*?(?:Revised:\s*([^\n\r]+).*?)?Accepted:\s*([^\n\r]+)",
+        # 2025 inline format: "Received: 21 June 2025  Revised: 17 August 2025  Accepted: 28 August 2025"
+        r"Received:\s*([^R\n]+?)(?:\s+Revised:\s*([^A\n]+?))?\s+Accepted:\s*([^\n\r]+)",
+        # 2025 format: "received on DD Month YYYY, and accepted for publishing on DD Month YYYY"
+        r"received on ([^,]+(?:, \d{4})?),?\s*(?:revised on ([^,]+),\s*)?and accepted for publishing on ([^.]+)\.",
+        # Legacy format: "The article was received on..."
+        r"(?:The\s+)?article was received on ([^,]+(?:, \d{4})?),?\s*(?:revised on ([^,]+),\s*)?and accepted for publishing on ([^.]+)\."
+    ]
     
-    if match:
-        dates["received"] = match.group(1).strip()
-        if match.group(2):  # revised date is optional
-            dates["revised"] = match.group(2).strip()
-        dates["accepted"] = match.group(3).strip()
+    for pattern in date_patterns:
+        match = re.search(pattern, text, re.I | re.S)
+        if match:
+            dates["received"] = match.group(1).strip()
+            if match.group(2):  # revised date is optional
+                dates["revised"] = match.group(2).strip()
+            dates["accepted"] = match.group(3).strip()
+            print(f"🔧 Found dates: received='{dates['received']}', revised='{dates['revised']}', accepted='{dates['accepted']}'")
+            return dates
+    
+    # Fallback: try individual line patterns for 2025
+    received_match = re.search(r"Received:\s*([^\n\r]+)", text, re.I)
+    if received_match:
+        dates["received"] = received_match.group(1).strip()
+    
+    revised_match = re.search(r"Revised:\s*([^\n\r]+)", text, re.I)
+    if revised_match:
+        dates["revised"] = revised_match.group(1).strip()
+    
+    accepted_match = re.search(r"Accepted:\s*([^\n\r]+)", text, re.I)
+    if accepted_match:
+        dates["accepted"] = accepted_match.group(1).strip()
+    
+    # If we found at least received and accepted, return
+    if dates["received"] and dates["accepted"]:
+        print(f"🔧 Found dates (fallback): received='{dates['received']}', revised='{dates['revised']}', accepted='{dates['accepted']}'")
         return dates
     
-    # Fallback: try simpler pattern
+    # Final fallback: try simpler pattern
     simple_pattern = r"received on ([^,]+(?:, \d{4})?)[^.]*accepted.*?on ([^.]+)"
     simple_match = re.search(simple_pattern, text, re.I | re.S)
     if simple_match:
@@ -154,8 +202,26 @@ def _parse_dates_flexible(text: str) -> Dict[str, str]:
     
     return dates
 
+def _extract_academic_editor(text: str) -> str:
+    """Extract academic editor - ENHANCED FOR 2025"""
+    # 2025 inline format: "Academic Editor: Octavian Vasiliu"
+    editor_patterns = [
+        r"Academic Editor:\s*([^\n\r]+?)(?:\s+Received:|$)",
+        r"Academic Editor[:\s]*([^\n\r]+)",
+        r"Editor[:\s]*([^\n\r]+)"
+    ]
+    
+    for pattern in editor_patterns:
+        match = re.search(pattern, text, re.I)
+        if match:
+            editor = match.group(1).strip()
+            print(f"🔧 Found academic editor: '{editor}'")
+            return editor
+    
+    return ""
+
 def _title_authors_universal(text: str, format_type: str, override: Optional[str] = None) -> Tuple[str, str]:
-    """Universal title and authors parsing for all formats - COMPLETELY REWRITTEN FOR 2022"""
+    """Universal title and authors parsing for all formats"""
     def cleaned(s):
         import unicodedata
         # Normalize unicode characters (NFKD decomposes characters)
@@ -180,12 +246,43 @@ def _title_authors_universal(text: str, format_type: str, override: Optional[str
                     authors_lines.append(ln.strip())
             return override.strip(), cleaned(" ".join(authors_lines))
 
-    # COMPLETELY NEW APPROACH FOR 2022 FORMAT
-    if format_type == "2022":
-        print("🔧 Using specialized 2022 parsing logic")
+    # NEW APPROACH FOR 2025 FORMAT
+    if format_type == "2025":
+        print("🔧 Using specialized 2025 parsing logic")
         
-        # For 2022 format, we work with the original text and look for the date line
-        # Then extract title and authors from the lines immediately following it
+        lines = text.splitlines()
+        
+        # For 2025, structure is very predictable:
+        # Line 0: ARTICLE_TYPE
+        # Line 2: DOI
+        # Line 4: TITLE
+        # Line 6: AUTHORS
+        # Line 8+: AFFILIATIONS
+        
+        title = ""
+        authors = ""
+        
+        # Extract title (should be at line 4, but let's be flexible)
+        for i in range(3, min(7, len(lines))):  # Check lines 3-6
+            line = lines[i].strip()
+            if line and not line.startswith("http") and not re.match(r"^\s*\w+\s*,", line):
+                title = cleaned(line)
+                print(f"🔧 2025 Found title at line {i}: '{title}'")
+                break
+        
+        # Extract authors (should be at line 6, but let's be flexible)
+        for i in range(5, min(9, len(lines))):  # Check lines 5-8
+            line = lines[i].strip()
+            if line and "," in line and (re.search(r"\d", line) or re.search("[" + _SUP_RANGE + "]", line)):
+                authors = cleaned(line)
+                print(f"🔧 2025 Found authors at line {i}: '{authors}'")
+                break
+        
+        return title, authors
+
+    # APPROACH FOR 2022 FORMAT
+    elif format_type == "2022":
+        print("🔧 Using specialized 2022 parsing logic")
         
         lines = text.splitlines()
         date_line_idx = -1
@@ -263,7 +360,7 @@ def _title_authors_universal(text: str, format_type: str, override: Optional[str
         
         return title, authors
     
-    # For other formats, use the existing logic with split content
+    # For other formats (2023, 2024), use the existing logic with split content
     after = _split_content_universal(text)
     
     lines = after.splitlines()
@@ -339,6 +436,17 @@ def _correspondence_universal(text: str) -> Tuple[str, str]:
     email = ""
     full_text = ""
     
+    # Try 2025 format: "Correspondence: Name, e-mail: email" OR "Correspondence: email"
+    corr_match_2025 = re.search(r"Correspondence:\s*([^\n\r]+)", text, re.I)
+    if corr_match_2025:
+        full_text = corr_match_2025.group(1).strip()
+        # Extract email from the line
+        email_match = re.search(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", full_text)
+        if email_match:
+            email = email_match.group(1)
+        print(f"🔧 Correspondence found: '{full_text}' -> email: '{email}'")
+        return email, full_text
+    
     # Try 2022 format: "Corresponding author: Name" followed by email on next line
     corr_match_2022 = re.search(r"Corresponding author:\s*([^\n\r]+)(?:\s*\n\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}))?", text, re.I)
     if corr_match_2022:
@@ -352,16 +460,6 @@ def _correspondence_universal(text: str) -> Tuple[str, str]:
                 email = email_match.group(1)
         return email, full_text
     
-    # Try 2023/2024 format: "Correspondence: Name, email"
-    corr_match_2023 = re.search(r"Correspondence[^:\n]*[:\s]\s*([^\n\r]+)", text, re.I)
-    if corr_match_2023:
-        full_text = corr_match_2023.group(1).strip()
-        # Extract email from the line
-        email_match = re.search(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", full_text)
-        if email_match:
-            email = email_match.group(1)
-        return email, full_text
-    
     # Fallback: search for any email in the text
     email_match = re.search(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", text)
     if email_match:
@@ -370,31 +468,30 @@ def _correspondence_universal(text: str) -> Tuple[str, str]:
     return email, full_text
 
 def _affiliations_universal(text: str, format_type: str) -> List[Tuple[str, str]]:
-    """Extract affiliations from any format - COMPLETELY FIXED VERSION"""
+    """Extract affiliations from any format"""
     lines = text.splitlines()
     affs = []
     
-    if format_type == "2022":
-        # For 2022: affiliations are BEFORE correspondence, not after
-        # Find the correspondence line first
+    if format_type == "2025":
+        print("🔧 Using specialized 2025 affiliations parsing")
+        
+        # For 2025: affiliations are typically at lines 8-11, before correspondence
         correspondence_idx = -1
         abstract_idx = -1
         
         for i, line in enumerate(lines):
-            if "Corresponding author:" in line:
+            if line.strip().startswith("Correspondence:"):
                 correspondence_idx = i
             elif line.strip().startswith("Abstract:"):
                 abstract_idx = i
-                break  # Abstract comes after affiliations
+                break
         
-        # Search for affiliations in the entire document
-        # They can be anywhere before correspondence but typically after authors
-        start_idx = 0
-        end_idx = correspondence_idx if correspondence_idx > 0 else len(lines)
+        # Search for affiliations before correspondence
+        start_idx = 7  # Start after typical authors line
+        end_idx = correspondence_idx if correspondence_idx > 0 else (abstract_idx if abstract_idx > 0 else len(lines))
         
-        print(f"🔧 Looking for affiliations between lines {start_idx} and {end_idx}")
+        print(f"🔧 2025 Looking for affiliations between lines {start_idx} and {end_idx}")
         
-        # Find numbered lines that look like institutions
         sup_range = "⁰¹²³⁴⁵⁶⁷⁸⁹"
         
         for i in range(start_idx, min(end_idx, len(lines))):
@@ -408,27 +505,60 @@ def _affiliations_universal(text: str, format_type: str) -> List[Tuple[str, str]
                 
                 # Check if it looks like an institution
                 if _looks_like_institution(content):
+                    # For 2025, affiliations are typically complete on one line
+                    # Remove page numbers at the end
+                    content = re.sub(r'\s+\d+\s*$', '', content)
+                    
+                    if content and len(content) > 10:
+                        affs.append((num, content))
+                        print(f"🔧 2025 Added affiliation {num}: {content[:50]}...")
+    
+    elif format_type == "2022":
+        # For 2022: affiliations are BEFORE correspondence
+        correspondence_idx = -1
+        abstract_idx = -1
+        
+        for i, line in enumerate(lines):
+            if "Corresponding author:" in line:
+                correspondence_idx = i
+            elif line.strip().startswith("Abstract:"):
+                abstract_idx = i
+                break
+        
+        # Search for affiliations in the document
+        start_idx = 0
+        end_idx = correspondence_idx if correspondence_idx > 0 else len(lines)
+        
+        print(f"🔧 Looking for affiliations between lines {start_idx} and {end_idx}")
+        
+        sup_range = "⁰¹²³⁴⁵⁶⁷⁸⁹"
+        
+        for i in range(start_idx, min(end_idx, len(lines))):
+            line = lines[i].strip()
+            
+            match = re.match(r"^\s*(\d+|[" + sup_range + r"]+)\s+(.*)$", line)
+            if match:
+                num = match.group(1).translate(_SUP_TO_DIG)
+                content = match.group(2).strip()
+                
+                if _looks_like_institution(content):
                     # Collect continuation lines
                     content_lines = [content] if content else []
                     j = i + 1
                     
-                    # Look for continuation lines
                     while j < min(end_idx, len(lines)):
                         next_line = lines[j].strip()
-                        if not next_line:  # Skip empty lines
+                        if not next_line:
                             j += 1
                             continue
                         
-                        # Stop if we hit another numbered line that looks like affiliation
                         if re.match(r"^\s*(\d+|[" + sup_range + r"]+)\s+[A-Z]", next_line):
                             break
                         
-                        # Stop if we hit correspondence or other sections
                         if ("Correspondence" in next_line or "Corresponding author" in next_line or
                             re.match(r"^\s*(Abstract|Keywords?|INTRODUCTION|REFERENCES)\b", next_line, re.I)):
                             break
                         
-                        # Add continuation line if it looks like part of institution name
                         if _looks_like_institution_continuation(next_line):
                             content_lines.append(next_line)
                         else:
@@ -436,20 +566,15 @@ def _affiliations_universal(text: str, format_type: str) -> List[Tuple[str, str]
                         
                         j += 1
                     
-                    # Join all content lines
                     full_content = " ".join(content_lines).strip()
-                    
-                    # Remove page numbers at the end
                     full_content = re.sub(r'\s+\d+\s*$', '', full_content)
                     
-                    # Final validation
                     if full_content and len(full_content) > 10 and _looks_like_institution(full_content):
                         affs.append((num, full_content))
                         print(f"🔧 Added affiliation {num}: {full_content[:50]}...")
     
     else:
         # For 2023/2024: affiliations are right after authors (top of page)
-        # Find correspondence section first
         corr_idx = -1
         for i, line in enumerate(lines):
             if ("Correspondence" in line.strip() or "Corresponding author" in line.strip()):
@@ -511,7 +636,7 @@ def _looks_like_institution(text: str) -> bool:
         "university", "hospital", "college", "institute", "school", "department",
         "faculty", "center", "centre", "clinic", "medical", "emergency",
         "bucuresti", "bucharest", "romania", "timisoara", "cluj", "iasi",
-        "universit", "spital", "clinica", "facultat"
+        "universit", "spital", "clinica", "facultat", "haifa", "israel"
     ]
     
     text_lower = text.lower()
@@ -606,7 +731,7 @@ def _parse_issue(issue_str: str) -> Dict[str, str]:
     return {"issue": issue_str.strip(), "year": year}
 
 def _extract_abstract_improved(text: str) -> str:
-    """Extract abstract with improved patterns - COMPLETELY FIXED VERSION"""
+    """Extract abstract with improved patterns"""
     
     # Method 1: Find Abstract: line and extract until Keywords:
     lines = text.splitlines()
@@ -671,7 +796,7 @@ def _extract_abstract_improved(text: str) -> str:
     return ""
 
 def _parse_page1_universal(txt: str, override: Optional[str] = None) -> Dict[str, Any]:
-    """Universal parser for all PDF formats (2022, 2023, 2024) - FINAL FIXED VERSION V4"""
+    """Universal parser for all PDF formats (2022, 2023, 2024, 2025) - V6 OPTIMIZED FOR FIRST PAGE"""
     data: Dict[str, Any] = {}
 
     # Detect format first
@@ -682,7 +807,7 @@ def _parse_page1_universal(txt: str, override: Optional[str] = None) -> Dict[str
     # Extract DOI
     data["doi"] = _extract_doi_universal(txt)
 
-    # Extract title and authors using COMPLETELY REWRITTEN function
+    # Extract title and authors
     title, authors_full = _title_authors_universal(txt, format_detected, override)
     data["title"] = title
     data["authors_full"] = authors_full
@@ -695,29 +820,29 @@ def _parse_page1_universal(txt: str, override: Optional[str] = None) -> Dict[str
     data["correspondence_email"] = correspondence_email
     data["correspondence_full"] = correspondence_full
 
-    # Extract affiliations using COMPLETELY FIXED function
+    # Extract affiliations
     data["affiliations"] = _affiliations_universal(txt, format_detected)
 
     # Detect article type
     data["article_type"] = _detect_article_type(txt)
 
-    # Parse dates
+    # Parse dates - ENHANCED FOR 2025
     dates = _parse_dates_flexible(txt)
     data["received"] = dates["received"]
     data["revised"] = dates["revised"]
     data["accepted"] = dates["accepted"]
 
-    # Extract academic editor (placeholder)
-    data["academic_editor"] = ""
+    # Extract academic editor - ENHANCED FOR 2025
+    data["academic_editor"] = _extract_academic_editor(txt)
 
     # Extract keywords
     keywords_match = re.search(r"Keywords?:\s*([^\n\r]+)", txt, re.I)
     data["keywords"] = keywords_match.group(1).strip() if keywords_match else ""
 
-    # Extract abstract using COMPLETELY FIXED function
+    # Extract abstract
     data["abstract"] = _extract_abstract_improved(txt)
 
-    # Citation (placeholder)
+    # Citation (placeholder - not typically in PDF)
     data["citation"] = ""
 
     # Article file (will be set by scrape function)
@@ -730,7 +855,7 @@ def _parse_page1_universal(txt: str, override: Optional[str] = None) -> Dict[str
     return data
 
 def scrape(url: str, title_override: Optional[str] = None, issue: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Main scraping function - FINAL FIXED VERSION V4"""
+    """Main scraping function - V6 OPTIMIZED FOR FIRST PAGE ONLY"""
     try:
         print(f"📥 Downloading PDF from: {url}")
         
@@ -738,10 +863,10 @@ def scrape(url: str, title_override: Optional[str] = None, issue: Optional[str] 
         response = requests.get(url, timeout=30)
         response.raise_for_status()
         
-        # Extract text
-        print("📄 Extracting text from PDF...")
+        # Extract text from FIRST PAGE ONLY
+        print("📄 Extracting text from first page only...")
         pdf_file = io.BytesIO(response.content)
-        text = extract_text(pdf_file)
+        text = _extract_first_page_text(pdf_file)
         
         # Parse the first page
         print("🔍 Parsing PDF content...")
@@ -765,13 +890,12 @@ def scrape(url: str, title_override: Optional[str] = None, issue: Optional[str] 
         traceback.print_exc()
         return None
 
-# HTML template - FIXED VERSION V4 with simplified Jinja2 expressions
+# HTML template - V6 with first page optimization badge
 HTML = """
 <!DOCTYPE html>
 <html>
-<head><title>PDF Scraper - FINAL FIXED V4</title>
+<head><title>PDF Scraper V6</title>
 <style>
-.copy-btn{width:100px;}
 body{font-family:Arial,sans-serif;max-width:1200px;margin:0 auto;padding:20px;background-color:#f5f5f5}
 form{background:white;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);margin-bottom:20px}
 label{display:block;margin:15px 0 5px;font-weight:bold;color:#333}
@@ -798,11 +922,12 @@ hr{margin:30px 0;border:none;border-top:2px solid #ddd}
 .format-2022{background-color:#ff6b6b;color:white}
 .format-2023{background-color:#4ecdc4;color:white}
 .format-2024{background-color:#45b7d1;color:white}
-.fixed-badge{background-color:#28a745;color:white;padding:5px 10px;border-radius:15px;font-size:12px;font-weight:bold;margin-left:10px}
+.format-2025{background-color:#9b59b6;color:white}
+.version-badge{background-color:#e74c3c;color:white;padding:5px 10px;border-radius:15px;font-size:12px;font-weight:bold;margin-left:10px}
 </style>
 </head>
 <body>
-<h1>PDF Scraper - FINAL FIXED V4 <span class="fixed-badge">V4 - TEMPLATE FIXED</span></h1>
+<h1>PDF Scraper V6 <span class="version-badge">FIRST PAGE OPTIMIZED</span></h1>
 
 <form method="post">
   <label>PDF URL *</label>
@@ -863,46 +988,36 @@ function cp(el){
 }
 
 function copyAuthorJSON(name, email, orders, authorNumber) {
-  // Get the button that was clicked
   const button = event.target;
-  
-  // Create simplified author data object for JSON
   const authorData = {
     name: name,
     email: email,
     order: orders,
     author_number: authorNumber
   };
-  
-  // Copy formatted JSON to clipboard with fallback
   const jsonString = JSON.stringify(authorData, null, 2);
   
-  // Try modern clipboard API first
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(jsonString).then(() => {
       showCopySuccess(button);
     }).catch(err => {
-      console.warn('Modern clipboard failed, trying fallback:', err);
       fallbackCopyToClipboard(jsonString, button);
     });
   } else {
-    // Use fallback method
     fallbackCopyToClipboard(jsonString, button);
   }
 }
 
 function fallbackCopyToClipboard(text, button) {
   try {
-    // Create temporary textarea
     const textarea = document.createElement('textarea');
     textarea.value = text;
     textarea.style.position = 'fixed';
     textarea.style.opacity = '0';
     document.body.appendChild(textarea);
     textarea.select();
-    textarea.setSelectionRange(0, 99999); // For mobile devices
+    textarea.setSelectionRange(0, 99999);
     
-    // Try to copy
     const successful = document.execCommand('copy');
     document.body.removeChild(textarea);
     
@@ -912,13 +1027,11 @@ function fallbackCopyToClipboard(text, button) {
       showCopyError(button, text, 'Fallback copy failed');
     }
   } catch (err) {
-    console.error('Fallback copy error:', err);
     showCopyError(button, text, 'Copy failed: ' + err.message);
   }
 }
 
 function showCopySuccess(button) {
-  // Visual feedback
   button.style.backgroundColor = '#28a745';
   button.textContent = 'Copied!';
   setTimeout(() => {
@@ -935,8 +1048,6 @@ function showCopyError(button, jsonString, message) {
     button.style.backgroundColor = '#007cba';
     button.textContent = 'Copy';
   }, 2000);
-  
-  // Show the JSON in an alert as last resort
   alert('Copy failed! Here is the JSON to copy manually:\\n\\n' + jsonString);
 }
 
