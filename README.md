@@ -1,14 +1,15 @@
-# RJMM PDF Scraper V6
+# RJMM PDF Scraper V7
 
-Advanced PDF metadata extraction tool for Romanian Journal of Military Medicine articles with full support for multiple formats (2022-2025).
+Advanced PDF metadata extraction tool for Romanian Journal of Military Medicine articles with full support for multiple formats (2020-2025).
 
 ## 🚀 Features
 
 ### Multi-Format Support
+- **2020 Format**: Early format with article type header, no DOI ⭐ NEW
 - **2022 Format**: Legacy format with/without DOI
 - **2023 Format**: Volume header with HTTPS DOI  
 - **2024 Format**: Modern format with HTTPS DOI
-- **2025 Format**: Latest format with specialized parsing ⭐ NEW
+- **2025 Format**: Latest format with specialized parsing
 
 ### Optimized Performance
 - **First-page extraction only** for improved speed
@@ -87,6 +88,7 @@ if result:
 - **2024**: HTTPS DOI without volume header
 - **2023**: Volume header + HTTPS DOI
 - **2022**: `doi:` prefix or specific date patterns
+- **2020**: Date pattern (2019-2020) + no DOI
 
 ### Parsing Strategy
 - **First-page optimization**: Extracts only from page 1 for speed
@@ -103,9 +105,10 @@ if result:
 
 The scraper has been tested with multiple PDF formats:
 
-- ✅ 2025 format: 3/3 test cases passed
-- ✅ 2022 format: 5/5 test cases passed  
+- ✅ 2020 format: 2/2 test cases passed ⭐ NEW
+- ✅ 2022 format: 5/5 test cases passed
 - ✅ 2023/2024 formats: Compatible (legacy support)
+- ✅ 2025 format: 3/3 test cases passed
 
 ## 📊 Performance
 
@@ -123,7 +126,8 @@ The scraper has been tested with multiple PDF formats:
 
 ## 📝 Version History
 
-- **V6** (Current): 2025 format support, first-page optimization
+- **V7** (Current): 2020 format support, improved format detection
+- **V6**: 2025 format support, first-page optimization
 - **V5**: Enhanced 2025 parsing, template fixes
 - **V4**: Improved affiliation extraction, UI updates
 - **V3**: Abstract parsing fixes, correspondence improvements

@@ -85,12 +85,23 @@ def _extract_first_page_text(pdf_file) -> str:
         return extract_text(pdf_file)
 
 def _detect_format(text: str) -> str:
-    """Detect PDF format (2022, 2023, 2024, 2025) based on content patterns"""
+    """Detect PDF format (2020, 2022, 2023, 2024, 2025) based on content patterns"""
     
-    # Check for 2025 format - HTTPS DOI with specific 2025 pattern
+    # Check for 2025 format first - HTTPS DOI with specific 2025 pattern
     if re.search(r"https://doi\.org/10\.55453/rjmm\.2025\.", text, re.I):
         print("🔧 Detected 2025 format based on DOI pattern")
         return "2025"
+    
+    # Check for 2020 format - Article type at beginning, no HTTPS DOI
+    # 2020 format has: "Article received on ... and accepted for publishing on ..." at the top
+    # followed by article type (SYSTEMATIC REVIEW, ORIGINAL ARTICLE, REVIEW, etc.)
+    # May or may not have volume header "Vol. CXXIII"
+    # Key indicator: date line followed by article type, and year 2020 in date
+    if (re.search(r"Article received on .+201[89].+accepted for publishing on .+2020\.", text, re.I) and
+        not re.search(r"https://doi\.org/", text, re.I) and
+        not re.search(r"doi:\s*\d", text, re.I)):
+        print("🔧 Detected 2020 format based on date pattern (2019-2020) + no DOI")
+        return "2020"
     
     # Check for 2022 format indicators
     if re.search(r"doi:\s*\d", text, re.I):
@@ -280,6 +291,100 @@ def _title_authors_universal(text: str, format_type: str, override: Optional[str
         
         return title, authors
 
+    # APPROACH FOR 2020 FORMAT
+    elif format_type == "2020":
+        print("🔧 Using specialized 2020 parsing logic")
+        
+        lines = text.splitlines()
+        
+        # Find article type line (SYSTEMATIC REVIEW, ORIGINAL ARTICLE, etc.)
+        article_types = ["SYSTEMATIC REVIEW", "ORIGINAL ARTICLES", "ORIGINAL ARTICLE", "REVIEW ARTICLE", "REVIEW", "CASE REPORT", "EDITORIAL"]
+        article_type_idx = -1
+        
+        for i, line in enumerate(lines[:20]):  # Check first 20 lines
+            line_upper = line.strip().upper()
+            if line_upper in article_types:
+                article_type_idx = i
+                print(f"🔧 Found article type at line {i}: {line.strip()}")
+                break
+        
+        if article_type_idx == -1:
+            print("❌ Could not find article type in 2020 format")
+            return "", ""
+        
+        # Skip to after article type and date line
+        # Structure: article_type (line 2) -> empty -> date (line 4) -> empty -> title starts (line 6)
+        i = article_type_idx + 1
+        
+        # Skip empty line after article type
+        while i < len(lines) and not lines[i].strip():
+            i += 1
+        
+        # Skip date line (contains "Article received on")
+        if i < len(lines) and "Article received on" in lines[i]:
+            print(f"🔧 Skipping date line at {i}: {lines[i].strip()[:50]}...")
+            i += 1
+        
+        # Skip empty lines after date
+        while i < len(lines) and not lines[i].strip():
+            i += 1
+        
+        # Extract title lines (until we find a line that looks like authors)
+        title_lines = []
+        def looks_like_authors(ln):
+            # Authors line typically has names with numbers/superscripts and commas
+            return ("," in ln and 
+                    (re.search(r"\d", ln) or re.search("[" + _SUP_RANGE + "]", ln)) and
+                    not ln.strip().startswith("Abstract:") and
+                    not ln.strip().startswith("Keywords:") and
+                    "Article received" not in ln)
+        
+        while i < len(lines):
+            line = lines[i].strip()
+            if not line:
+                i += 1
+                continue
+            
+            if looks_like_authors(line):
+                print(f"🔧 Found authors line at index {i}: {line}")
+                break
+            
+            # Stop if we hit abstract or keywords
+            if line.startswith("Abstract:") or line.startswith("Keywords:"):
+                break
+            
+            title_lines.append(line)
+            i += 1
+        
+        # Extract authors lines
+        authors_lines = []
+        while i < len(lines):
+            line = lines[i].strip()
+            if not line:
+                i += 1
+                continue
+            
+            # Stop at abstract, keywords, or affiliations
+            if (line.startswith("Abstract:") or 
+                line.startswith("Keywords:") or
+                AFFIL_START.match(line) or
+                "Correspondence" in line or 
+                "Corresponding author" in line):
+                break
+            
+            if looks_like_authors(line):
+                authors_lines.append(line)
+            
+            i += 1
+        
+        title = cleaned(" ".join(title_lines))
+        authors = cleaned(" ".join(authors_lines))
+        
+        print(f"🔧 2020 Extracted title: '{title}'")
+        print(f"🔧 2020 Extracted authors: '{authors}'")
+        
+        return title, authors
+    
     # APPROACH FOR 2022 FORMAT
     elif format_type == "2022":
         print("🔧 Using specialized 2022 parsing logic")
