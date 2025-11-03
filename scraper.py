@@ -632,6 +632,88 @@ def _affiliations_universal(text: str, format_type: str) -> List[Tuple[str, str]
                         affs.append((num, content))
                         print(f"🔧 2025 Added affiliation {num}: {content[:50]}...")
     
+    elif format_type == "2020":
+        # For 2020: affiliations are AFTER correspondence, multi-line format
+        correspondence_idx = -1
+        abstract_idx = -1
+        
+        # For 2020, affiliations can be BEFORE or AFTER correspondence
+        # Search the entire document but stop at major sections
+        start_idx = 0
+        end_idx = len(lines)
+        
+        # Find the end point (METHODS, RESULTS, DISCUSSION sections - not INTRODUCTION/BACKGROUND as affiliations may appear there)
+        for i in range(0, len(lines)):
+            line = lines[i].strip()
+            if re.match(r'^(METHODS|RESULTS|DISCUSSION|REFERENCES|CONCLUSIONS?)$', line, re.I):
+                end_idx = i
+                break
+        
+        print(f"🔧 2020 Looking for affiliations between lines {start_idx} and {end_idx}")
+        
+        sup_range = "⁰¹²³⁴⁵⁶⁷⁸⁹"
+        
+        i = start_idx
+        while i < min(end_idx, len(lines)):
+            line = lines[i].strip()
+            
+            # Match affiliation number at start of line
+            match = re.match(r"^\s*(\d+|[" + sup_range + r"]+)\s+(.*)$", line)
+            if match:
+                num = match.group(1).translate(_SUP_TO_DIG)
+                content = match.group(2).strip()
+                
+                # Only accept affiliation numbers 1-9 (filter out false positives like "20 February")
+                if int(num) > 9:
+                    i += 1
+                    continue
+                
+                if _looks_like_institution(content) or len(content) > 5:
+                    # Collect continuation lines (multi-line affiliations)
+                    content_lines = [content] if content else []
+                    j = i + 1
+                    
+                    while j < min(end_idx, len(lines)):
+                        next_line = lines[j].strip()
+                        
+                        # Empty line - skip but continue
+                        if not next_line:
+                            j += 1
+                            continue
+                        
+                        # New affiliation number - stop
+                        if re.match(r"^\s*(\d+|[" + sup_range + r"]+)\s+[A-Z]", next_line):
+                            break
+                        
+                        # Abstract or other section - stop
+                        if (next_line.startswith("Abstract:") or next_line.startswith("Keywords:") or
+                            next_line.startswith("INTRODUCTION") or next_line.startswith("BACKGROUND")):
+                            break
+                        
+                        # Looks like continuation of institution name
+                        # Stop if line starts with lowercase (likely body text)
+                        if next_line and next_line[0].islower():
+                            break
+                        
+                        if _looks_like_institution_continuation(next_line):
+                            content_lines.append(next_line)
+                            j += 1
+                        else:
+                            break
+                    
+                    # Join all lines and clean up
+                    full_content = " ".join(content_lines).strip()
+                    # Remove page numbers at the end
+                    full_content = re.sub(r'\s+\d+\s*$', '', full_content)
+                    
+                    if full_content and len(full_content) > 10:
+                        affs.append((num, full_content))
+                        print(f"🔧 2020 Added affiliation {num}: {full_content[:60]}...")
+                    
+                    i = j - 1
+            
+            i += 1
+    
     elif format_type == "2022":
         # For 2022: affiliations are BEFORE correspondence
         correspondence_idx = -1
@@ -982,10 +1064,25 @@ def scrape(url: str, title_override: Optional[str] = None, issue: Optional[str] 
         response = requests.get(url, timeout=30)
         response.raise_for_status()
         
-        # Extract text from FIRST PAGE ONLY
-        print("📄 Extracting text from first page only...")
+        # Extract text - first page only for most formats, 2 pages for 2020
         pdf_file = io.BytesIO(response.content)
-        text = _extract_first_page_text(pdf_file)
+        
+        # Quick check if it's 2020 format (needs 2 pages for affiliations)
+        temp_text = _extract_first_page_text(io.BytesIO(response.content))
+        is_2020 = (re.search(r"(The )?[Aa]rticle (was )?received on .+accepted for publishing on .+2020\.", temp_text, re.I) and
+                   not re.search(r"https://doi\.org/", temp_text, re.I) and
+                   not re.search(r"doi:\s*\d", temp_text, re.I))
+        
+        if is_2020:
+            print("📄 Extracting text from first 2 pages (2020 format for affiliations)...")
+            # Extract first 2 pages for 2020 format to get affiliations
+            from pdfminer.high_level import extract_text
+            from pdfminer.layout import LAParams
+            laparams = LAParams()
+            text = extract_text(pdf_file, page_numbers=[0, 1], laparams=laparams)
+        else:
+            print("📄 Extracting text from first page only...")
+            text = temp_text
         
         # Parse the first page
         print("🔍 Parsing PDF content...")
