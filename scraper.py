@@ -70,6 +70,17 @@ def _split_authors(authors_full: str) -> list[dict[str, str]]:
         )
         exists = _check_author_exists(name)
         out.append({"name": name, "orders": orders, "exists": exists})
+    
+    # Fallback: if no authors found (no affiliation numbers), split by comma
+    if not out and "," in authors_full:
+        print("🔧 No affiliation numbers found, splitting authors by comma")
+        # Split by comma and clean up names
+        names = [n.strip() for n in authors_full.split(",")]
+        for name in names:
+            if name and len(name) > 2:  # Skip empty or too short
+                exists = _check_author_exists(name)
+                out.append({"name": name, "orders": "", "exists": exists})
+    
     return out
 
 def _extract_first_page_text(pdf_file) -> str:
@@ -93,14 +104,14 @@ def _detect_format(text: str) -> str:
         return "2025"
     
     # Check for 2020 format - Article type at beginning, no HTTPS DOI
-    # 2020 format has: "Article received on ... and accepted for publishing on ..." at the top
+    # 2020 format has: "Article received on..." or "The article was received on..." at the top
     # followed by article type (SYSTEMATIC REVIEW, ORIGINAL ARTICLE, REVIEW, etc.)
     # May or may not have volume header "Vol. CXXIII"
-    # Key indicator: date line followed by article type, and year 2020 in date
-    if (re.search(r"Article received on .+201[89].+accepted for publishing on .+2020\.", text, re.I) and
+    # Key indicator: accepted year 2020, and no DOI
+    if (re.search(r"(The )?[Aa]rticle (was )?received on .+accepted for publishing on .+2020\.", text, re.I) and
         not re.search(r"https://doi\.org/", text, re.I) and
         not re.search(r"doi:\s*\d", text, re.I)):
-        print("🔧 Detected 2020 format based on date pattern (2019-2020) + no DOI")
+        print("🔧 Detected 2020 format based on accepted year 2020 + no DOI")
         return "2020"
     
     # Check for 2022 format indicators
@@ -320,8 +331,8 @@ def _title_authors_universal(text: str, format_type: str, override: Optional[str
         while i < len(lines) and not lines[i].strip():
             i += 1
         
-        # Skip date line (contains "Article received on")
-        if i < len(lines) and "Article received on" in lines[i]:
+        # Skip date line (contains "Article received on" or "The article was received on")
+        if i < len(lines) and ("Article received on" in lines[i] or "The article was received on" in lines[i]):
             print(f"🔧 Skipping date line at {i}: {lines[i].strip()[:50]}...")
             i += 1
         
@@ -332,12 +343,15 @@ def _title_authors_universal(text: str, format_type: str, override: Optional[str
         # Extract title lines (until we find a line that looks like authors)
         title_lines = []
         def looks_like_authors(ln):
-            # Authors line typically has names with numbers/superscripts and commas
-            return ("," in ln and 
-                    (re.search(r"\d", ln) or re.search("[" + _SUP_RANGE + "]", ln)) and
-                    not ln.strip().startswith("Abstract:") and
-                    not ln.strip().startswith("Keywords:") and
-                    "Article received" not in ln)
+            # Authors line has multiple names with commas
+            # Must have comma, must NOT be a date line, must NOT start with Abstract/Keywords
+            # Can have numbers (superscripts) or not
+            has_comma = "," in ln
+            not_date = "received" not in ln.lower() and "accepted" not in ln.lower()
+            not_abstract = not ln.strip().startswith("Abstract:") and not ln.strip().startswith("Keywords:")
+            # Check if it looks like names (has capital letters after commas)
+            has_names = re.search(r",\s*[A-Z]", ln) is not None
+            return has_comma and not_date and not_abstract and has_names
         
         while i < len(lines):
             line = lines[i].strip()
