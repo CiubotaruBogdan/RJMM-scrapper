@@ -1,1 +1,8 @@
 __pycache__/
+
+# PDF test files
+*.pdf
+
+# Generated JSON metadata files
+*_metadata.json
+all_articles_metadata.json
