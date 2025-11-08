@@ -309,7 +309,25 @@ def _title_authors_universal(text: str, format_type: str, override: Optional[str
         lines = text.splitlines()
         
         # Find article type line (SYSTEMATIC REVIEW, ORIGINAL ARTICLE, etc.)
-        article_types = ["SYSTEMATIC REVIEW", "ORIGINAL ARTICLES", "ORIGINAL ARTICLE", "REVIEW ARTICLE", "REVIEW", "CASE REPORT", "EDITORIAL"]
+        # All possible article types in the journal
+        article_types = [
+            "ARTICLE",
+            "CLINICAL PRACTICE",
+            "COMMENTARY",
+            "COMMUNICATION",
+            "LETTER",
+            "LITERATURE REVIEW",
+            "NARRATIVE REVIEW",
+            "ORIGINAL ARTICLE",
+            "ORIGINAL ARTICLES",
+            "ORIGINAL RESEARCH",
+            "REVIEW",
+            "REVIEW ARTICLE",
+            "SYSTEMATIC REVIEW",
+            "CASE REPORT",
+            "EDITORIAL",
+            "VARIA"
+        ]
         article_type_idx = -1
         
         for i, line in enumerate(lines[:20]):  # Check first 20 lines
@@ -513,7 +531,13 @@ def _title_authors_universal(text: str, format_type: str, override: Optional[str
     # Skip article type line for 2022/2023 formats
     if format_type in ["2022", "2023"] and i < len(lines):
         line = lines[i].strip()
-        article_types = ["REVIEW", "ORIGINAL ARTICLE", "CASE REPORT", "EDITORIAL", "LETTER", "COMMENTARY", "SHORT COMMUNICATION"]
+        # All possible article types
+        article_types = [
+            "ARTICLE", "CLINICAL PRACTICE", "COMMENTARY", "COMMUNICATION",
+            "LETTER", "LITERATURE REVIEW", "NARRATIVE REVIEW", "ORIGINAL ARTICLE",
+            "ORIGINAL ARTICLES", "ORIGINAL RESEARCH", "REVIEW", "REVIEW ARTICLE",
+            "SYSTEMATIC REVIEW", "CASE REPORT", "EDITORIAL", "VARIA", "SHORT COMMUNICATION"
+        ]
         if line.upper() in article_types:
             print(f"🔍 Skipping article type: {line}")
             i += 1
