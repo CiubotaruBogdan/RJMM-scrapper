@@ -938,6 +938,7 @@ def _detect_article_type(text: str) -> str:
         "Original Research": [r"original\s+research", r"research\s+article", r"original\s+article"],
         "Review": [r"review\s+article", r"systematic\s+review", r"literature\s+review", r"mini.?review", r"^review$"],
         "Case Report": [r"case\s+report", r"case\s+study", r"clinical\s+case"],
+        "Clinical Practice": [r"clinical\s+practice"],
         "Editorial": [r"editorial", r"editor.?s?\s+note"],
         "Letter": [r"letter\s+to\s+editor", r"correspondence", r"letter"],
         "Short Communication": [r"short\s+communication", r"brief\s+communication", r"rapid\s+communication"],
