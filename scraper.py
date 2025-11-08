@@ -103,19 +103,19 @@ def _detect_format(text: str) -> str:
         print("🔧 Detected 2025 format based on DOI pattern")
         return "2025"
     
-    # Check for 2019/2020 format - Article type at beginning, no HTTPS DOI
-    # 2019/2020 format has: "Article received on..." or "The article was received on..." at the top
+    # Check for 2018/2019/2020 format - Article type at beginning, no HTTPS DOI
+    # 2018/2019/2020 format has: "Article received on..." or "The article was received on..." at the top
     # followed by article type (SYSTEMATIC REVIEW, ORIGINAL ARTICLE, REVIEW, etc.)
-    # May or may not have volume header "Vol. CXXII" or "Vol. CXXIII"
+    # May or may not have volume header "Vol. CXXI", "Vol. CXXII" or "Vol. CXXIII"
     # Key indicators:
-    # 1. Accepted year 2018-2020 AND no DOI, OR
-    # 2. Volume header with "/2019" or "/2020" (e.g., "Vol. CXXII • No. 1/2019")
-    has_2019_2020_volume = re.search(r"Vol\.\s+[IVXLC]+.*?/(2019|2020)", text, re.I)
-    has_2018_2020_acceptance = re.search(r"(The )?[Aa]rticle (was )?received on .+accepted for publishing on .+(2018|2019|2020)\.", text, re.I)
+    # 1. Accepted year 2017-2020 AND no DOI, OR
+    # 2. Volume header with "/2018", "/2019" or "/2020" (e.g., "Vol. CXXI • No. 1/2018")
+    has_2018_2020_volume = re.search(r"Vol\.\s+[IVXLC]+.*?/(2018|2019|2020)", text, re.I)
+    has_2017_2020_acceptance = re.search(r"(The )?[Aa]rticle (was )?received on .+accepted for publishing on .+(2017|2018|2019|2020)\.", text, re.I)
     has_no_doi = not re.search(r"https://doi\.org/", text, re.I) and not re.search(r"doi:\s*\d", text, re.I)
     
-    if (has_2019_2020_volume or (has_2018_2020_acceptance and has_no_doi)):
-        print("🔧 Detected 2019/2020 format based on volume/date pattern + no DOI")
+    if (has_2018_2020_volume or (has_2017_2020_acceptance and has_no_doi)):
+        print("🔧 Detected 2018/2019/2020 format based on volume/date pattern + no DOI")
         return "2020"
     
     # Check for 2022 format indicators
