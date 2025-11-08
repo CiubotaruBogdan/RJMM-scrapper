@@ -949,9 +949,12 @@ def _detect_article_type(text: str) -> str:
     for article_type, type_patterns in patterns.items():
         for pattern in type_patterns:
             if re.search(pattern, text_lower):
+                # WordPress mapping: convert "Original articles" (plural) to "Original article" (singular)
+                if article_type == "Original Research":
+                    return "Original article"
                 return article_type
     
-    return "Original Research"  # Default
+    return "Original article"  # Default (WordPress compatible)
 
 def _parse_issue(issue_str: str) -> Dict[str, str]:
     """Parse issue string like 'No.5 / 2025, Vol. CXXVIII, September'"""
