@@ -330,7 +330,8 @@ def _title_authors_universal(text: str, format_type: str, override: Optional[str
             "SYSTEMATIC REVIEW",
             "CASE REPORT",
             "EDITORIAL",
-            "VARIA"
+            "VARIA",
+            "EDUCATION AND IMAGING"
         ]
         article_type_idx = -1
         
@@ -540,7 +541,8 @@ def _title_authors_universal(text: str, format_type: str, override: Optional[str
             "ARTICLE", "CLINICAL PRACTICE", "COMMENTARY", "COMMUNICATION",
             "LETTER", "LITERATURE REVIEW", "NARRATIVE REVIEW", "ORIGINAL ARTICLE",
             "ORIGINAL ARTICLES", "ORIGINAL RESEARCH", "REVIEW", "REVIEW ARTICLE",
-            "SYSTEMATIC REVIEW", "CASE REPORT", "EDITORIAL", "VARIA", "SHORT COMMUNICATION"
+            "SYSTEMATIC REVIEW", "CASE REPORT", "EDITORIAL", "VARIA", "SHORT COMMUNICATION",
+            "EDUCATION AND IMAGING"
         ]
         if line.upper() in article_types:
             print(f"🔍 Skipping article type: {line}")
@@ -943,7 +945,8 @@ def _detect_article_type(text: str) -> str:
         "Letter": [r"letter\s+to\s+editor", r"correspondence", r"letter"],
         "Short Communication": [r"short\s+communication", r"brief\s+communication", r"rapid\s+communication"],
         "Commentary": [r"commentary", r"perspective", r"viewpoint"],
-        "Technical Note": [r"technical\s+note", r"methodology", r"protocol"]
+        "Technical Note": [r"technical\s+note", r"methodology", r"protocol"],
+        "Education and Imaging": [r"education\s+and\s+imaging"]
     }
     
     # Check each pattern
