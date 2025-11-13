@@ -95,7 +95,7 @@ def _extract_first_page_text(pdf_file) -> str:
         # Fallback to full document if first page extraction fails
         return extract_text(pdf_file)
 
-def _detect_format(text: str) -> str:
+def _detect_format(text: str, url: str = "") -> str:
     """Detect PDF format (2020, 2022, 2023, 2024, 2025) based on content patterns"""
     
     # Check for 2025 format first - HTTPS DOI with specific 2025 pattern
@@ -1033,14 +1033,15 @@ def _extract_abstract_improved(text: str) -> str:
     print("❌ No valid abstract found")
     return ""
 
-def _parse_page1_universal(txt: str, override: Optional[str] = None) -> Dict[str, Any]:
+def _parse_page1_universal(txt: str, format_detected: str, override: Optional[str] = None) -> Dict[str, Any]:
     """Universal parser for all PDF formats (2022, 2023, 2024, 2025) - V6 OPTIMIZED FOR FIRST PAGE"""
-    data: Dict[str, Any] = {}
+    data: Dict[str, Any] = {"format_detected": "2017"}
 
-    # Detect format first
-    format_detected = _detect_format(txt)
     data["format_detected"] = format_detected
-    print(f"🔍 Detected format: {format_detected}")
+    print(f"🔍 Parsing with format: {format_detected}")
+
+    # PARSE BASED ON DETECTED FORMAT
+    # All formats use the universal parsing logic below
 
     # Extract DOI
     data["doi"] = _extract_doi_universal(txt)
@@ -1096,6 +1097,57 @@ def _parse_page1_universal(txt: str, override: Optional[str] = None) -> Dict[str
     return data
 
 def scrape(url: str, title_override: Optional[str] = None, issue: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Main scraping function - V6 OPTIMIZED FOR FIRST PAGE ONLY"""
+    try:
+        print(f"📥 Downloading PDF from: {url}")
+        
+        # Download PDF
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        
+        pdf_file = io.BytesIO(response.content)
+        
+        # Initial text extraction to detect format
+        temp_text = _extract_first_page_text(io.BytesIO(response.content))
+        format_detected = _detect_format(temp_text, url)
+        
+        # For other formats, use pdfminer
+        is_2020 = (re.search(r"(The )?[Aa]rticle (was )?received on .+accepted for publishing on .+2020\.", temp_text, re.I) and
+                   not re.search(r"https://doi\.org/", temp_text, re.I) and
+                   not re.search(r"doi:\s*\d", temp_text, re.I))
+        
+        if is_2020:
+            print("📄 Extracting text from first 2 pages (2020 format for affiliations)...")
+            pdf_file.seek(0)
+            from pdfminer.high_level import extract_text
+            from pdfminer.layout import LAParams
+            laparams = LAParams()
+            text = extract_text(pdf_file, page_numbers=[0, 1], laparams=laparams)
+        else:
+            print("📄 Extracting text from first page only...")
+            text = temp_text
+        
+        # Parse the content
+        print("🔍 Parsing PDF content...")
+        data = _parse_page1_universal(text, format_detected, title_override)
+        
+        # Set article file URL
+        data["article_file"] = url
+        
+        # Parse issue if provided
+        if issue:
+            issue_data = _parse_issue(issue)
+            data["issue"] = issue_data["issue"]
+            data["year"] = issue_data["year"]
+        
+        print("✅ Scraping completed successfully!")
+        return data
+        
+    except Exception as e:
+        print(f"❌ Error during scraping: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
     """Main scraping function - V6 OPTIMIZED FOR FIRST PAGE ONLY"""
     try:
         print(f"📥 Downloading PDF from: {url}")
@@ -1340,3 +1392,5 @@ def index():
 
 if __name__=="__main__":
     app.run(debug=True)
+
+
