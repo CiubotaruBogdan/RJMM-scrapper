@@ -111,7 +111,7 @@ def _detect_format(text: str, url: str = "") -> str:
     # 1. Accepted year 2015-2020 AND no DOI, OR
     # 2. Volume header with "/2016", "/2017", "/2018", "/2019" or "/2020" (e.g., "Vol. CXIX • No. 3/2016")
     has_2016_2020_volume = re.search(r"Vol\.\s+[IVXLC]+.*?/(2016|2017|2018|2019|2020)", text, re.I)
-    has_2015_2020_acceptance = re.search(r"(The )?[Aa]rticle (was )?received on .+accepted for publishing on .+(2015|2016|2017|2018|2019|2020)\.", text, re.I)
+    has_2015_2020_acceptance = re.search(r"(The )?[Aa]rticle (was )?received on .+accepted for publishing on .+(2015|2016|2017|2018|2019|2020)\.?", text, re.I)
     has_no_doi = not re.search(r"https://doi\.org/", text, re.I) and not re.search(r"doi:\s*\d", text, re.I)
     
     if (has_2016_2020_volume or (has_2015_2020_acceptance and has_no_doi)):
