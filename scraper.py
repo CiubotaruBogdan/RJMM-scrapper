@@ -2,10 +2,13 @@
 
 import io
 import re
+import time
 import unicodedata
 from typing import Dict, Any, List, Optional, Tuple
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from flask import Flask, render_template_string, request
 from pdfminer.high_level import extract_text
 from pdfminer.layout import LAParams
@@ -1104,8 +1107,45 @@ def scrape(url: str, title_override: Optional[str] = None, issue: Optional[str] 
     try:
         print(f"📥 Downloading PDF from: {url}")
         
-        # Download PDF
-        response = requests.get(url, timeout=30)
+        # Download PDF with proper headers and retry logic
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'application/pdf,application/octet-stream,*/*',
+            'Accept-Language': 'en-US,en;q=0.9,ro;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0'
+        }
+        
+        # Create session with retry strategy
+        session = requests.Session()
+        
+        # Configure retry strategy
+        retry_strategy = Retry(
+            total=5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "OPTIONS"],
+            backoff_factor=3,
+            raise_on_status=False
+        )
+        
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        
+        # Set headers for session
+        session.headers.update(headers)
+        
+        print(f"🔄 Downloading with anti-bot protection...")
+        
+        # Add delay to avoid rate limiting
+        time.sleep(1)
+        
+        response = session.get(url, timeout=30, allow_redirects=True, verify=False)
         response.raise_for_status()
         
         pdf_file = io.BytesIO(response.content)
