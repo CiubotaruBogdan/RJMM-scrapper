@@ -51,6 +51,8 @@ def _check_author_exists(author_name: str) -> bool:
     slug = _normalize_author_name(author_name)
     url = f"https://revistamedicinamilitara.ro/article-author/{slug}/"
     try:
+        # Add 1 second delay to avoid rate limiting
+        time.sleep(1)
         response = requests.head(url)
         return response.status_code != 404
     except:
