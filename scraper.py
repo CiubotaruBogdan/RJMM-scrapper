@@ -1125,39 +1125,49 @@ def _parse_2017_format(txt: str, override: Optional[str] = None) -> Dict[str, An
     
     # Extract affiliations (look for numbered institutions)
     affiliations = []
-    affiliation_lines = []
     
+    # Find lines that start with numbers (affiliation markers)
+    affiliation_starts = []
     for i, line in enumerate(lines):
         line = line.strip()
-        if line and (
-            'department' in line.lower() or 
-            'university' in line.lower() or 
-            'hospital' in line.lower() or
-            'faculty' in line.lower() or
-            'bucharest' in line.lower() or
-            'romania' in line.lower()
-        ):
-            affiliation_lines.append(line)
+        if line.startswith(("1 ", "2 ", "3 ", "4 ", "5 ")):
+            affiliation_starts.append(i)
     
-    # Group affiliation lines into complete affiliations
-    if affiliation_lines:
-        current_affiliation = []
-        for line in affiliation_lines:
-            if line.startswith(("1 ", "2 ", "3 ", "4 ", "5 ")):
-                # Start of new affiliation
-                if current_affiliation:
-                    affiliations.append(" ".join(current_affiliation))
-                current_affiliation = [line]
-            else:
-                # Continuation of current affiliation
-                if current_affiliation:
-                    current_affiliation.append(line)
-                else:
-                    current_affiliation = [line]
+    # For each affiliation start, collect consecutive lines
+    for start_idx in affiliation_starts:
+        affiliation_parts = []
+        current_line_idx = start_idx
         
-        # Add the last affiliation
-        if current_affiliation:
-            affiliations.append(" ".join(current_affiliation))
+        # Add the starting line
+        affiliation_parts.append(lines[start_idx].strip())
+        
+        # Look for continuation lines
+        current_line_idx += 1
+        while current_line_idx < len(lines):
+            next_line = lines[current_line_idx].strip()
+            
+            # Stop if we hit another numbered affiliation
+            if next_line.startswith(("1 ", "2 ", "3 ", "4 ", "5 ")):
+                break
+                
+            # Stop if empty line
+            if not next_line:
+                current_line_idx += 1
+                continue
+            
+            # Add line if it looks like part of affiliation
+            keywords = ['university', 'institute', 'hospital', 'faculty', 'romania', 'bucharest', 'medicine', 'pharmacy']
+            if any(keyword in next_line.lower() for keyword in keywords) or len(next_line) < 50:
+                affiliation_parts.append(next_line)
+            else:
+                break
+                
+            current_line_idx += 1
+        
+        # Join the parts and add to affiliations
+        if affiliation_parts:
+            full_affiliation = " ".join(affiliation_parts)
+            affiliations.append(full_affiliation)
     
     # Extract correspondence (look for "Corresponding author:")
     correspondence_full = ""
