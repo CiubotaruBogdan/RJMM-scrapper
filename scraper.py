@@ -1123,6 +1123,42 @@ def _parse_2017_format(txt: str, override: Optional[str] = None) -> Dict[str, An
             keywords = line.replace("Keywords:", "").strip()
             break
     
+    # Extract affiliations (look for numbered institutions)
+    affiliations = []
+    affiliation_lines = []
+    
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if line and (
+            'department' in line.lower() or 
+            'university' in line.lower() or 
+            'hospital' in line.lower() or
+            'faculty' in line.lower() or
+            'bucharest' in line.lower() or
+            'romania' in line.lower()
+        ):
+            affiliation_lines.append(line)
+    
+    # Group affiliation lines into complete affiliations
+    if affiliation_lines:
+        current_affiliation = []
+        for line in affiliation_lines:
+            if line.startswith(("1 ", "2 ", "3 ", "4 ", "5 ")):
+                # Start of new affiliation
+                if current_affiliation:
+                    affiliations.append(" ".join(current_affiliation))
+                current_affiliation = [line]
+            else:
+                # Continuation of current affiliation
+                if current_affiliation:
+                    current_affiliation.append(line)
+                else:
+                    current_affiliation = [line]
+        
+        # Add the last affiliation
+        if current_affiliation:
+            affiliations.append(" ".join(current_affiliation))
+    
     # Extract correspondence (look for "Corresponding author:")
     correspondence_full = ""
     for i, line in enumerate(lines):
@@ -1154,7 +1190,7 @@ def _parse_2017_format(txt: str, override: Optional[str] = None) -> Dict[str, An
     data["accepted_date"] = accepted_date
     data["academic_editor"] = ""
     data["correspondence_full"] = correspondence_full
-    data["affiliations"] = []
+    data["affiliations"] = affiliations
     data["citation"] = ""
     data["issue"] = ""
     data["year"] = "2017"
