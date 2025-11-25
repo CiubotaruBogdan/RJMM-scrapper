@@ -1472,12 +1472,12 @@ hr{margin:30px 0;border:none;border-top:2px solid #ddd}
 </div>{% endfor %}
 <label>Correspondence e‑mail</label><input readonly onclick="cp(this)" value="{{data.correspondence_email}}">
 <label>Correspondence (full)</label><textarea readonly onclick="cp(this)">{{data.correspondence_full}}</textarea>
-{% for n,aff in data.affiliations %}<label>Affiliation {{loop.index}}</label><input readonly onclick="cp(this)" value="{{aff}}">{% endfor %}
+{% for aff in data.affiliations %}<label>Affiliation {{loop.index}}</label><input readonly onclick="cp(this)" value="{{aff}}">{% endfor %}
 <label>DOI</label><input readonly onclick="cp(this)" value="{{data.doi}}">
 <label>Abstract</label><textarea readonly onclick="cp(this)">{{data.abstract}}</textarea>
-<label>Received</label><input readonly onclick="cp(this)" value="{{data.received}}">
-<label>Revised</label><input readonly onclick="cp(this)" value="{{data.revised}}">
-<label>Accepted</label><input readonly onclick="cp(this)" value="{{data.accepted}}">
+<label>Received</label><input readonly onclick="cp(this)" value="{{data.received_date}}">
+<label>Revised</label><input readonly onclick="cp(this)" value="{{data.revised_date}}">
+<label>Accepted</label><input readonly onclick="cp(this)" value="{{data.accepted_date}}">
 <label>Academic Editor</label><input readonly onclick="cp(this)" value="{{data.academic_editor}}">
 <label>Keywords</label><input readonly onclick="cp(this)" value="{{data.keywords}}">
 <label>Article Type</label><input readonly onclick="cp(this)" value="{{data.article_type}}">
