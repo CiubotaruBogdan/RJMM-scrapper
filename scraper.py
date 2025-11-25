@@ -1063,14 +1063,25 @@ def _parse_2017_format(txt: str, override: Optional[str] = None) -> Dict[str, An
                 accepted_date = date_match.group(2).strip()
             break
     
-    # Extract title (lines 4-6 typically)
+    # Extract title (lines 4-6 typically, skip date line and authors)
     title = ""
     title_lines = []
-    for i in range(3, min(8, len(lines))):
+    for i in range(3, min(10, len(lines))):
         line = lines[i].strip()
-        if line and not line.startswith("http") and not re.match(r"^\s*\w+\s*,", line):
+        # Skip lines with dates, emails, author patterns, or numbers with superscripts
+        if (line and 
+            not line.startswith("http") and 
+            not "received on" in line.lower() and
+            not "accepted for publishing" in line.lower() and
+            not re.match(r"^\s*\w+\s*,", line) and
+            not re.search(r"\d{4}", line) and
+            not re.search(r"[A-Z][a-z]+ [A-Z][a-z]+\d", line)):  # Skip author lines with numbers
             title_lines.append(cleaned(line))
-        if len(title_lines) >= 3:  # Max 3 lines for title
+        # Stop if we hit an author line or abstract
+        if (re.search(r"[A-Z][a-z]+ [A-Z][a-z]+\d", line) or 
+            line.startswith("Abstract:")):
+            break
+        if len(title_lines) >= 2:  # Max 2 lines for title
             break
     
     title = " ".join(title_lines) if title_lines else ""
@@ -1112,6 +1123,23 @@ def _parse_2017_format(txt: str, override: Optional[str] = None) -> Dict[str, An
             keywords = line.replace("Keywords:", "").strip()
             break
     
+    # Extract correspondence (look for "Corresponding author:")
+    correspondence_full = ""
+    for i, line in enumerate(lines):
+        if "corresponding author:" in line.lower():
+            # Get the correspondence line and potentially the next line (email)
+            correspondence_parts = []
+            correspondence_parts.append(line.replace("Corresponding author:", "").strip())
+            
+            # Check if next line has email
+            if i + 1 < len(lines):
+                next_line = lines[i + 1].strip()
+                if "@" in next_line:
+                    correspondence_parts.append(next_line)
+            
+            correspondence_full = " ".join(correspondence_parts)
+            break
+    
     # Parse authors
     authors = _split_authors(authors_full)
     
@@ -1125,7 +1153,7 @@ def _parse_2017_format(txt: str, override: Optional[str] = None) -> Dict[str, An
     data["received_date"] = received_date
     data["accepted_date"] = accepted_date
     data["academic_editor"] = ""
-    data["correspondence_full"] = ""
+    data["correspondence_full"] = correspondence_full
     data["affiliations"] = []
     data["citation"] = ""
     data["issue"] = ""
