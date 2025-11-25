@@ -1138,8 +1138,12 @@ def _parse_2017_format(txt: str, override: Optional[str] = None) -> Dict[str, An
         affiliation_parts = []
         current_line_idx = start_idx
         
-        # Add the starting line
-        affiliation_parts.append(lines[start_idx].strip())
+        # Extract the number from the starting line
+        first_line = lines[start_idx].strip()
+        affiliation_num = first_line.split()[0]  # Get the number (1, 2, 3, etc.)
+        
+        # Add the starting line (without the number)
+        affiliation_parts.append(first_line[len(affiliation_num):].strip())
         
         # Look for continuation lines
         current_line_idx += 1
@@ -1164,10 +1168,10 @@ def _parse_2017_format(txt: str, override: Optional[str] = None) -> Dict[str, An
                 
             current_line_idx += 1
         
-        # Join the parts and add to affiliations
+        # Join the parts and add to affiliations as tuple (num, content)
         if affiliation_parts:
             full_affiliation = " ".join(affiliation_parts)
-            affiliations.append(full_affiliation)
+            affiliations.append((affiliation_num, full_affiliation))
     
     # Extract correspondence (look for "Corresponding author:")
     correspondence_full = ""
@@ -1482,7 +1486,7 @@ hr{margin:30px 0;border:none;border-top:2px solid #ddd}
 </div>{% endfor %}
 <label>Correspondence e‑mail</label><input readonly onclick="cp(this)" value="{{data.correspondence_email}}">
 <label>Correspondence (full)</label><textarea readonly onclick="cp(this)">{{data.correspondence_full}}</textarea>
-{% for aff in data.affiliations %}<label>Affiliation {{loop.index}}</label><input readonly onclick="cp(this)" value="{{aff}}">{% endfor %}
+{% for aff in data.affiliations %}<label>Affiliation {{aff[0]}}</label><input readonly onclick="cp(this)" value="{{aff[1]}}">{% endfor %}
 <label>DOI</label><input readonly onclick="cp(this)" value="{{data.doi}}">
 <label>Abstract</label><textarea readonly onclick="cp(this)">{{data.abstract}}</textarea>
 <label>Received</label><input readonly onclick="cp(this)" value="{{data.received_date}}">
