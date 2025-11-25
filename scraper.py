@@ -51,8 +51,6 @@ def _check_author_exists(author_name: str) -> bool:
     slug = _normalize_author_name(author_name)
     url = f"https://revistamedicinamilitara.ro/article-author/{slug}/"
     try:
-        # Add 1 second delay to avoid rate limiting
-        time.sleep(1)
         response = requests.head(url)
         return response.status_code != 404
     except:
@@ -108,10 +106,14 @@ def _detect_format(text: str, url: str = "") -> str:
         print("🔧 Detected 2025 format based on DOI pattern")
         return "2025"
     
+    # Check for 2017 format specifically - "Article received on" with 2017 year
+    if re.search(r"Article received on .+ 2017 and accepted for publishing on .+ 2017\.", text, re.I):
+        print("🔧 Detected 2017 format based on date pattern")
+        return "2017"
+    
     # Check for 2016/2017/2018/2019/2020 format - Article type at beginning, no HTTPS DOI
     # 2016/2017/2018/2019/2020 format has: "Article received on..." or "The article was received on..." at the top
     # followed by article type (SYSTEMATIC REVIEW, ORIGINAL ARTICLE, REVIEW, etc.)
-    # May or may not have volume header "Vol. CXIX", "Vol. CXX", "Vol. CXXI", "Vol. CXXII" or "Vol. CXXIII"
     # Key indicators:
     # 1. Accepted year 2015-2020 AND no DOI, OR
     # 2. Volume header with "/2016", "/2017", "/2018", "/2019" or "/2020" (e.g., "Vol. CXIX • No. 3/2016")
@@ -1041,15 +1043,107 @@ def _extract_abstract_improved(text: str) -> str:
     print("❌ No valid abstract found")
     return ""
 
-def _parse_page1_universal(txt: str, format_detected: str, override: Optional[str] = None) -> Dict[str, Any]:
-    """Universal parser for all PDF formats (2022, 2023, 2024, 2025) - V6 OPTIMIZED FOR FIRST PAGE"""
+def _parse_2017_format(txt: str, override: Optional[str] = None) -> Dict[str, Any]:
+    """Parse 2017 format PDF"""
     data: Dict[str, Any] = {"format_detected": "2017"}
+    
+    lines = txt.split('\n')
+    cleaned = lambda x: re.sub(r'\s+', ' ', x).strip()
+    
+    # Extract dates from "Article received on" line
+    received_date = ""
+    accepted_date = ""
+    
+    for line in lines[:10]:  # Check first 10 lines
+        if "Article received on" in line:
+            # Extract dates from pattern: "Article received on March 7, 2017 and accepted for publishing on August 18, 2017."
+            date_match = re.search(r"Article received on (.+?) and accepted for publishing on (.+?)\.", line)
+            if date_match:
+                received_date = date_match.group(1).strip()
+                accepted_date = date_match.group(2).strip()
+            break
+    
+    # Extract title (lines 4-6 typically)
+    title = ""
+    title_lines = []
+    for i in range(3, min(8, len(lines))):
+        line = lines[i].strip()
+        if line and not line.startswith("http") and not re.match(r"^\s*\w+\s*,", line):
+            title_lines.append(cleaned(line))
+        if len(title_lines) >= 3:  # Max 3 lines for title
+            break
+    
+    title = " ".join(title_lines) if title_lines else ""
+    if override:
+        title = override
+    
+    # Extract authors (typically line 7-8)
+    authors_full = ""
+    for i in range(6, min(12, len(lines))):
+        line = lines[i].strip()
+        if line and re.search(r"[A-Z][a-z]+ [A-Z][a-z]+", line):  # Pattern for names
+            authors_full = cleaned(line)
+            break
+    
+    # Extract abstract
+    abstract = ""
+    abstract_start = -1
+    for i, line in enumerate(lines):
+        if line.strip().startswith("Abstract:"):
+            abstract_start = i
+            break
+    
+    if abstract_start >= 0:
+        abstract_lines = []
+        for i in range(abstract_start, len(lines)):
+            line = lines[i].strip()
+            if line.startswith("Keywords:"):
+                break
+            if line.startswith("Abstract:"):
+                line = line.replace("Abstract:", "").strip()
+            if line:
+                abstract_lines.append(line)
+        abstract = " ".join(abstract_lines)
+    
+    # Extract keywords
+    keywords = ""
+    for line in lines:
+        if line.strip().startswith("Keywords:"):
+            keywords = line.replace("Keywords:", "").strip()
+            break
+    
+    # Parse authors
+    authors = _split_authors(authors_full)
+    
+    # Set data
+    data["title"] = title
+    data["authors"] = authors
+    data["authors_full"] = authors_full
+    data["abstract"] = abstract
+    data["keywords"] = keywords
+    data["doi"] = ""  # 2017 format doesn't have DOI
+    data["received_date"] = received_date
+    data["accepted_date"] = accepted_date
+    data["academic_editor"] = ""
+    data["correspondence_full"] = ""
+    data["affiliations"] = []
+    data["citation"] = ""
+    data["issue"] = ""
+    data["year"] = "2017"
+    
+    return data
 
-    data["format_detected"] = format_detected
+def _parse_page1_universal(txt: str, format_detected: str, override: Optional[str] = None) -> Dict[str, Any]:
+    """Universal parser for all PDF formats (2017, 2022, 2023, 2024, 2025) - V6 OPTIMIZED FOR FIRST PAGE"""
+    data: Dict[str, Any] = {"format_detected": format_detected}
+
     print(f"🔍 Parsing with format: {format_detected}")
 
     # PARSE BASED ON DETECTED FORMAT
-    # All formats use the universal parsing logic below
+    if format_detected == "2017":
+        return _parse_2017_format(txt, override)
+    
+    # All other formats use the universal parsing logic below
 
     # Extract DOI
     data["doi"] = _extract_doi_universal(txt)
@@ -1143,9 +1237,6 @@ def scrape(url: str, title_override: Optional[str] = None, issue: Optional[str] 
         session.headers.update(headers)
         
         print(f"🔄 Downloading with anti-bot protection...")
-        
-        # Add delay to avoid rate limiting
-        time.sleep(1)
         
         response = session.get(url, timeout=30, allow_redirects=True, verify=False)
         response.raise_for_status()
