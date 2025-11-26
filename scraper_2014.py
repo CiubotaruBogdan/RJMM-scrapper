@@ -388,6 +388,7 @@ const orig=el.style.background;
 el.style.background='#d4edda';
 setTimeout(()=>el.style.background=orig,300);
 }
+{% if data %}
 document.getElementById('copyAll').onclick=e=>{
   e.preventDefault();
   const fullData={{data|tojson}};
@@ -402,6 +403,7 @@ document.getElementById('copyAffiliations').onclick=e=>{
   navigator.clipboard.writeText(JSON.stringify(affiliationsOnly))
     .then(()=>alert('Affiliations JSON copied ✔'));
 };
+{% endif %}
 </script>
 </body>
 </html>"""
