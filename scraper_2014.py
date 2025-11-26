@@ -78,16 +78,14 @@ def _parse_2014_format(txt: str) -> Dict[str, Any]:
     lines = txt.split('\n')
     cleaned = lambda x: re.sub(r'\s+', ' ', x).strip()
     
-    # Extract issue from line 1: "Vol. CXVII • New Series • No. 3-4/2014 • Romanian Journal of Military Medicine"
+    # Extract issue from line 1
     issue = ""
     if len(lines) > 0:
         first_line = lines[0].strip()
-        # Extract the full issue string
         issue_match = re.search(r"(Vol\.\s+[IVXLC]+.*?No\.\s*[\d\-]+/2014)", first_line, re.I)
         if issue_match:
             issue = issue_match.group(1).strip()
     
-    # Extract year
     year = "2014"
     
     # Extract article type from line 3
@@ -97,25 +95,23 @@ def _parse_2014_format(txt: str) -> Dict[str, Any]:
         if type_line:
             article_type = type_line
     
-    # Extract dates from "Article received on" line (typically line 5)
+    # Extract dates
     received_date = ""
     accepted_date = ""
     
     for line in lines[:10]:
         if "Article received on" in line:
-            # Pattern: "Article received on July 13, 2014 and accepted for publishing on July 29 2014."
             date_match = re.search(r"Article received on (.+?) and accepted for publishing on (.+?)\.?$", line, re.I)
             if date_match:
                 received_date = date_match.group(1).strip()
                 accepted_date = date_match.group(2).strip()
             break
     
-    # Extract title (typically line 7)
+    # Extract title
     title = ""
     title_lines = []
     for i in range(6, min(12, len(lines))):
         line = lines[i].strip()
-        # Skip empty lines, dates, emails, author patterns
         if (line and 
             not line.startswith("http") and 
             not "received on" in line.lower() and
@@ -123,7 +119,6 @@ def _parse_2014_format(txt: str) -> Dict[str, Any]:
             not re.match(r"^\s*\w+\s+\w+\s*\d", line) and
             not line.startswith("Abstract:")):
             title_lines.append(cleaned(line))
-        # Stop if we hit an author line or abstract
         if (re.search(r"[A-Z][a-z]+ [A-Z][a-z]+.*?\d", line) or 
             line.startswith("Abstract:")):
             break
@@ -132,25 +127,22 @@ def _parse_2014_format(txt: str) -> Dict[str, Any]:
     
     title = " ".join(title_lines)
     
-    # Extract authors (lines after title, before abstract)
+    # Extract authors
     authors_full = ""
     for i in range(6, min(15, len(lines))):
         line = lines[i].strip()
-        # Look for author pattern: names with superscript numbers
         if re.search(r"[A-Z][a-z]+ [A-Z][a-z]+.*?\d", line) and not line.startswith("Abstract:"):
             authors_full = cleaned(line)
-            # Check if authors continue on next line
             if i + 1 < len(lines):
                 next_line = lines[i + 1].strip()
                 if next_line and not next_line.startswith("Abstract:") and re.search(r"[A-Z][a-z]+ [A-Z][a-z]+", next_line):
                     authors_full += " " + cleaned(next_line)
             break
     
-    # Extract abstract (starts with "Abstract:")
+    # Extract abstract
     abstract = ""
     for i, line in enumerate(lines):
         if line.strip().startswith("Abstract:"):
-            # Collect abstract lines until Keywords or first section
             abstract_lines = []
             for j in range(i, len(lines)):
                 abstract_line = lines[j].strip()
@@ -158,7 +150,6 @@ def _parse_2014_format(txt: str) -> Dict[str, Any]:
                     abstract_line in ["INTRODUCTION", "ANATOMY OF THE PROSTATE GLAND", "MATERIAL AND METHODS"]):
                     break
                 if abstract_line:
-                    # Remove "Abstract:" prefix
                     abstract_line = abstract_line.replace("Abstract:", "").strip()
                     if abstract_line:
                         abstract_lines.append(abstract_line)
@@ -172,69 +163,53 @@ def _parse_2014_format(txt: str) -> Dict[str, Any]:
             keywords = line.replace("Keywords:", "").strip()
             break
     
-    # Extract affiliations (look for numbered institutions)
+    # Extract affiliations
     affiliations = []
-    
-    # Find lines that start with numbers (affiliation markers)
     affiliation_starts = []
     for i, line in enumerate(lines):
         line = line.strip()
         if line.startswith(("1 ", "2 ", "3 ", "4 ", "5 ")):
             affiliation_starts.append(i)
     
-    # For each affiliation start, collect consecutive lines
     for start_idx in affiliation_starts:
         affiliation_parts = []
         current_line_idx = start_idx
         
-        # Extract the number from the starting line
         first_line = lines[start_idx].strip()
         affiliation_num = first_line.split()[0]
-        
-        # Add the starting line (without the number)
         affiliation_parts.append(first_line[len(affiliation_num):].strip())
         
-        # Look for continuation lines
         current_line_idx += 1
         while current_line_idx < len(lines):
             next_line = lines[current_line_idx].strip()
             
-            # Stop if we hit another numbered affiliation
             if next_line.startswith(("1 ", "2 ", "3 ", "4 ", "5 ")):
                 break
-                
-            # Stop if empty line
             if not next_line:
                 current_line_idx += 1
                 continue
             
-            # Add line if it looks like part of affiliation
             keywords_list = ['university', 'institute', 'hospital', 'faculty', 'romania', 'bucharest', 'medicine', 'pharmacy', 'department', 'clinic']
             if any(keyword in next_line.lower() for keyword in keywords_list) or len(next_line) < 50:
                 affiliation_parts.append(next_line)
             else:
                 break
-                
             current_line_idx += 1
         
-        # Join the parts and add to affiliations as tuple (num, content)
         if affiliation_parts:
             full_affiliation = " ".join(affiliation_parts)
             affiliations.append((affiliation_num, full_affiliation))
     
-    # Extract correspondence (look for "Corresponding author:")
+    # Extract correspondence
     correspondence_full = ""
     for i, line in enumerate(lines):
         if "corresponding author:" in line.lower():
             correspondence_parts = []
             correspondence_parts.append(line.replace("Corresponding author:", "").strip())
-            
-            # Check if next line has email
             if i + 1 < len(lines):
                 next_line = lines[i + 1].strip()
                 if "@" in next_line:
                     correspondence_parts.append(next_line)
-            
             correspondence_full = " ".join(correspondence_parts)
             break
     
@@ -247,10 +222,10 @@ def _parse_2014_format(txt: str) -> Dict[str, Any]:
     data["authors_full"] = authors_full
     data["abstract"] = abstract
     data["keywords"] = keywords
-    data["doi"] = ""  # 2014 format doesn't have DOI
+    data["doi"] = ""
     data["received_date"] = received_date
     data["accepted_date"] = accepted_date
-    data["revised_date"] = ""  # 2014 format doesn't have revised date
+    data["revised_date"] = ""
     data["academic_editor"] = ""
     data["correspondence_full"] = correspondence_full
     data["affiliations"] = affiliations
@@ -267,7 +242,6 @@ def scrape(url: str) -> Optional[Dict[str, Any]]:
     try:
         print(f"📥 Downloading PDF from: {url}")
         
-        # Download PDF with proper headers
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'application/pdf,application/octet-stream,*/*',
@@ -288,7 +262,6 @@ def scrape(url: str) -> Optional[Dict[str, Any]]:
         response = session.get(url, timeout=30)
         response.raise_for_status()
         
-        # Extract text from first page
         pdf_file = io.BytesIO(response.content)
         laparams = LAParams(line_margin=0.3, word_margin=0.1, char_margin=2.0)
         text = extract_text(pdf_file, page_numbers=[0], laparams=laparams)
@@ -306,54 +279,63 @@ def scrape(url: str) -> Optional[Dict[str, Any]]:
         traceback.print_exc()
         return None
 
-# HTML Template (same as scraper.py)
-HTML_TEMPLATE = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>RJMM 2014 Scraper</title>
+# HTML Template (same structure as scraper.py)
+HTML = """
+<!DOCTYPE html>
+<html>
+<head><title>PDF Scraper 2014</title>
 <style>
-body{font-family:system-ui,sans-serif;max-width:1000px;margin:2rem auto;padding:0 1rem;background:#fafafa}
-h1{color:#2c3e50;border-bottom:3px solid #3498db;padding-bottom:0.5rem}
-.input-group{margin:2rem 0;padding:1.5rem;background:white;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1)}
-input[type="text"]{width:100%;padding:0.75rem;border:2px solid #ddd;border-radius:4px;font-size:1rem;box-sizing:border-box}
-input[type="text"]:focus{outline:none;border-color:#3498db}
-button{background:#3498db;color:white;border:none;padding:0.75rem 2rem;border-radius:4px;font-size:1rem;cursor:pointer;margin-top:1rem}
-button:hover{background:#2980b9}
-.result{background:white;padding:1.5rem;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);margin-top:2rem}
-.result label{display:block;font-weight:600;color:#2c3e50;margin-top:1rem;margin-bottom:0.25rem}
-.result input,.result textarea{width:100%;padding:0.5rem;border:1px solid #ddd;border-radius:4px;font-family:monospace;font-size:0.9rem;background:#f8f9fa;box-sizing:border-box}
-.result textarea{min-height:100px;resize:vertical}
-.result input:focus,.result textarea:focus{outline:none;border-color:#3498db;background:white}
-.author-row{display:grid;grid-template-columns:1fr auto;gap:0.5rem;margin-bottom:0.5rem}
-.author-order{width:80px}
-.corresponding-author{background:#fff3cd;border-color:#ffc107}
-.btn-group{display:flex;gap:1rem;margin-top:1.5rem}
-.btn-copy{background:#27ae60;flex:1}
-.btn-copy:hover{background:#229954}
-.error{background:#fee;border:2px solid #c33;color:#c33;padding:1rem;border-radius:4px;margin-top:1rem}
-.format-badge{display:inline-block;background:#3498db;color:white;padding:0.25rem 0.75rem;border-radius:12px;font-size:0.85rem;margin-left:0.5rem}
+body{font-family:Arial,sans-serif;max-width:1200px;margin:0 auto;padding:20px;background-color:#f5f5f5}
+form{background:white;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);margin-bottom:20px}
+label{display:block;margin:15px 0 5px;font-weight:bold;color:#333}
+input,textarea,button{width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box}
+textarea{height:100px;resize:vertical;font-family:monospace}
+button{background-color:#007cba;color:white;border:none;cursor:pointer;margin-top:10px}
+button:hover{background-color:#005a87}
+hr{margin:30px 0;border:none;border-top:2px solid #ddd}
+#json{height:400px;background-color:#f8f9fa;font-family:monospace;font-size:12px}
+.author-row{display:flex;gap:.5rem;align-items:center}.author-row input{flex:1}.author-order{max-width:120px}
+.author-status-bullet{width:20px;height:20px;border-radius:50%;cursor:pointer;flex-shrink:0}
+.author-status-bullet.status-exists{background-color:#dc3545}
+.author-status-bullet.status-not-exists{background-color:#28a745}
+.author-number{min-width:30px;font-weight:bold;text-align:center;color:#666}
+.button-group{display:flex;gap:10px;margin-top:10px}
+.button-group button{margin-top:0}
+.copy-btn{background-color:#007cba;color:white;border:none;padding:5px 10px;border-radius:3px;cursor:pointer;font-size:12px;min-width:50px;height:25px}
+.copy-btn:hover{background-color:#005a87}
+.copy-btn:active{background-color:#004570}
+.corresponding-author{background-color:#fff9c4 !important}
+.author-row-corresponding{background-color:#fff9c4;border-radius:5px;padding:5px}
+.format-badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:bold;margin-left:10px;background-color:#e67e22;color:white}
+.version-badge{background-color:#e74c3c;color:white;padding:5px 10px;border-radius:15px;font-size:12px;font-weight:bold;margin-left:10px}
 </style>
 </head>
 <body>
-<h1>📄 RJMM 2014 Scraper<span class="format-badge">2014 Only</span></h1>
-<div class="input-group">
-<label for="url"><strong>PDF URL:</strong></label>
-<input type="text" id="url" placeholder="https://revistamedicinamilitara.ro/.../2014-...pdf" value="{{url}}">
-<button onclick="scrape()">🔍 Scrape PDF</button>
-</div>
-{% if error %}
-<div class="error">❌ {{error}}</div>
-{% endif %}
+<h1>PDF Scraper 2014 <span class="version-badge">2014 ONLY</span></h1>
+
+<form method="post">
+  <label>PDF URL *</label>
+  <input name="url" value="{{url or ''}}" required>
+  <button type="submit">Scrape</button>
+  {% if data %}
+  <div class="button-group">
+    <button type="button" id="copyJSON">Copy Full JSON</button>
+    <button type="button" id="copyAffiliations">Copy Affiliations JSON</button>
+  </div>
+  {% endif %}
+</form>
+
 {% if data %}
-<div class="result">
-<h2>📋 Extracted Metadata <span class="format-badge">{{data.format_detected}}</span></h2>
+<hr>
+<label>Detected Format <span class="format-badge">{{data.format_detected.upper()}}</span></label>
 <label>Title</label><input readonly onclick="cp(this)" value="{{data.title}}">
-<label>Issue</label><input readonly onclick="cp(this)" value="{{data.issue}}">
-<label>Year</label><input readonly onclick="cp(this)" value="{{data.year}}">
-<label>Article Type</label><input readonly onclick="cp(this)" value="{{data.article_type}}">
-<label>Authors ({{data.authors|length}})</label>
-{% for a in data.authors %}<div class="author-row">
+<label>Authors (full line)</label><textarea readonly onclick="cp(this)">{{data.authors_full}}</textarea>
+<label>Authors (table)</label>
+{% for a in data.authors %}
+<div class="author-row {% if a.name in (data.correspondence_full or '') %}author-row-corresponding{% endif %}">
+  <div class="author-status-bullet {% if a.exists %}status-exists{% else %}status-not-exists{% endif %}" onclick="cp(this)" title="{% if a.exists %}Author exists (RED){% else %}Author not found (GREEN){% endif %}"></div>
+  <button class="copy-btn" onclick="copyAuthorJSON('{{a.name}}', '{{data.correspondence_email if a.name in (data.correspondence_full or '') else ''}}', '{{a.orders}}', {{loop.index}})">Copy</button>
+  <div class="author-number">{{loop.index}}.</div>
   <input readonly onclick="cp(this)" value="{{a.name}}" {% if a.name in (data.correspondence_full or '') %}class="corresponding-author"{% endif %}>
   <input class="author-order" readonly onclick="cp(this)" value="{{a.orders}}">
 </div>{% endfor %}
@@ -366,34 +348,91 @@ button:hover{background:#2980b9}
 <label>Revised</label><input readonly onclick="cp(this)" value="{{data.revised_date}}">
 <label>Accepted</label><input readonly onclick="cp(this)" value="{{data.accepted_date}}">
 <label>Academic Editor</label><input readonly onclick="cp(this)" value="{{data.academic_editor}}">
-<label>Citation</label><input readonly onclick="cp(this)" value="{{data.citation}}">
 <label>Keywords</label><input readonly onclick="cp(this)" value="{{data.keywords}}">
-<label>Article File URL</label><input readonly onclick="cp(this)" value="{{data.article_file}}">
-<div class="btn-group">
-<button class="btn-copy" id="copyAll">📋 Copy All JSON</button>
-<button class="btn-copy" id="copyAffiliations">📋 Copy Affiliations JSON</button>
-</div>
-</div>
+<label>Article Type</label><input readonly onclick="cp(this)" value="{{data.article_type}}">
+{% if data.issue %}<label>Issue</label><input readonly onclick="cp(this)" value="{{data.issue}}">{% endif %}
+{% if data.year %}<label>Year</label><input readonly onclick="cp(this)" value="{{data.year}}">{% endif %}
+
+<h3>JSON</h3>
+<textarea id="json" readonly onclick="cp(this)">{{data|tojson(indent=2)}}</textarea>
 {% endif %}
+
 <script>
-function scrape(){
-const url=document.getElementById('url').value;
-if(!url){alert('Please enter a PDF URL');return;}
-window.location.href='/?url='+encodeURIComponent(url);
-}
 function cp(el){
-el.select();
-document.execCommand('copy');
-const orig=el.style.background;
-el.style.background='#d4edda';
-setTimeout(()=>el.style.background=orig,300);
+  const txt=el.value||el.innerText||'';navigator.clipboard.writeText(txt).then(()=>{
+    el.style.outline='2px solid lime';setTimeout(()=>el.style.outline='',400);
+  });
 }
+
+function copyAuthorJSON(name, email, orders, authorNumber) {
+  const button = event.target;
+  const authorData = {
+    name: name,
+    email: email,
+    order: orders,
+    author_number: authorNumber
+  };
+  const jsonString = JSON.stringify(authorData, null, 2);
+  
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(jsonString).then(() => {
+      showCopySuccess(button);
+    }).catch(err => {
+      fallbackCopyToClipboard(jsonString, button);
+    });
+  } else {
+    fallbackCopyToClipboard(jsonString, button);
+  }
+}
+
+function fallbackCopyToClipboard(text, button) {
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    textarea.setSelectionRange(0, 99999);
+    
+    const successful = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    
+    if (successful) {
+      showCopySuccess(button);
+    } else {
+      showCopyError(button, text, 'Fallback copy failed');
+    }
+  } catch (err) {
+    showCopyError(button, text, 'Copy failed: ' + err.message);
+  }
+}
+
+function showCopySuccess(button) {
+  button.style.backgroundColor = '#28a745';
+  button.textContent = 'Copied!';
+  setTimeout(() => {
+    button.style.backgroundColor = '#dc3545';
+    button.textContent = 'Used';
+  }, 1000);
+}
+
+function showCopyError(button, jsonString, message) {
+  console.error('Copy failed:', message);
+  button.style.backgroundColor = '#dc3545';
+  button.textContent = 'Error!';
+  setTimeout(() => {
+    button.style.backgroundColor = '#007cba';
+    button.textContent = 'Copy';
+  }, 2000);
+  alert('Copy failed! Here is the JSON to copy manually:\\n\\n' + jsonString);
+}
+
 {% if data %}
-document.getElementById('copyAll').onclick=e=>{
-  e.preventDefault();
-  const fullData={{data|tojson}};
-  localStorage.setItem('article_meta',JSON.stringify(fullData));
-  navigator.clipboard.writeText(JSON.stringify(fullData))
+localStorage.setItem('article_meta', JSON.stringify({{data|tojson}}));
+
+document.getElementById('copyJSON').onclick=e=>{
+  e.preventDefault();navigator.clipboard.writeText(document.getElementById('json').value)
     .then(()=>alert('Full JSON copied ✔'));
 };
 
@@ -406,19 +445,17 @@ document.getElementById('copyAffiliations').onclick=e=>{
 {% endif %}
 </script>
 </body>
-</html>"""
+</html>
+"""
 
-@app.route("/")
+@app.route("/", methods=["GET", "POST"])
 def index():
-    url = request.args.get("url", "")
-    if not url:
-        return render_template_string(HTML_TEMPLATE, url="", data=None, error=None)
-    
-    data = scrape(url)
-    if data:
-        return render_template_string(HTML_TEMPLATE, url=url, data=data, error=None)
-    else:
-        return render_template_string(HTML_TEMPLATE, url=url, data=None, error="Failed to scrape PDF")
+    url = data = None
+    if request.method == "POST":
+        url = request.form.get("url", "").strip()
+        if url:
+            data = scrape(url)
+    return render_template_string(HTML, url=url, data=data)
 
 if __name__ == "__main__":
     print("🚀 Starting RJMM 2014 Scraper...")
