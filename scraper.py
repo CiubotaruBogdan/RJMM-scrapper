@@ -99,9 +99,18 @@ def _extract_first_page_text(pdf_file) -> str:
         return extract_text(pdf_file)
 
 def _detect_format(text: str, url: str = "") -> str:
-    """Detect PDF format (2015, 2017, 2020, 2022, 2023, 2024, 2025) based on content patterns"""
+    """Detect PDF format (2015, 2017, 2020, 2022, 2023, 2024, 2025, 2026) based on content patterns"""
     
-    # Check for 2025 format first - HTTPS DOI with specific 2025 pattern
+    # Check for 2026 format first - separate line dates format with Citation field
+    # Pattern: "Received: DD Month YYYY" on separate lines + "Citation:" field
+    if (re.search(r"Received:\s*\d+\s+\w+\s+202[56]", text, re.I) and 
+        re.search(r"Revised:\s*\d+\s+\w+\s+202[56]", text, re.I) and
+        re.search(r"Accepted:\s*\d+\s+\w+\s+202[56]", text, re.I) and
+        re.search(r"Citation:\s*\w+", text, re.I)):
+        print("🔧 Detected 2026 format based on separate-line dates + Citation field")
+        return "2026"
+    
+    # Check for 2025 format - HTTPS DOI with specific 2025 pattern
     if re.search(r"https://doi\.org/10\.55453/rjmm\.2025\.", text, re.I):
         print("🔧 Detected 2025 format based on DOI pattern")
         return "2025"
@@ -1445,11 +1454,11 @@ def _parse_page1_universal(txt: str, format_detected: str, override: Optional[st
     # Detect article type
     data["article_type"] = _detect_article_type(txt)
 
-    # Parse dates - ENHANCED FOR 2025
+    # Parse dates - ENHANCED FOR 2025 and 2026
     dates = _parse_dates_flexible(txt)
-    data["received"] = dates["received"]
-    data["revised"] = dates["revised"]
-    data["accepted"] = dates["accepted"]
+    data["received_date"] = dates["received"]
+    data["revised_date"] = dates["revised"]
+    data["accepted_date"] = dates["accepted"]
 
     # Extract academic editor - ENHANCED FOR 2025
     data["academic_editor"] = _extract_academic_editor(txt)
@@ -1464,8 +1473,15 @@ def _parse_page1_universal(txt: str, format_detected: str, override: Optional[st
     # Extract abstract
     data["abstract"] = _extract_abstract_improved(txt)
 
-    # Citation (placeholder - not typically in PDF)
-    data["citation"] = ""
+    # Citation - extract for 2026 format
+    citation = ""
+    citation_match = re.search(r"Citation:\s*([^\n\r]+(?:[\n\r]+[^\n\r]+)*?)(?=\n\s*\n|Received:|$)", txt, re.I | re.S)
+    if citation_match:
+        citation = citation_match.group(1).strip()
+        # Clean up multiple spaces and newlines
+        citation = re.sub(r'\s+', ' ', citation)
+        print(f"🔧 Found citation: {citation[:100]}...")
+    data["citation"] = citation
 
     # Article file (will be set by scrape function)
     data["article_file"] = ""
