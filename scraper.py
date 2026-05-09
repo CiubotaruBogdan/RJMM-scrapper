@@ -9,11 +9,6 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from flask import Flask, render_template_string, request
-try:
-    from curl_cffi import requests as curl_requests
-    _USE_CURL = True
-except ImportError:
-    _USE_CURL = False
 from pdfminer.high_level import extract_text
 from pdfminer.layout import LAParams
 
@@ -611,68 +606,57 @@ def _parse_page1_universal(txt: str, format_detected: str, override: Optional[st
 
     return data
 
-def scrape(url: str, title_override: Optional[str] = None, issue: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Main scraping function."""
-    import random, time
+def _download_pdf_via_chrome(url: str) -> bytes:
+    """Download PDF by opening real Chrome — bypasses all bot detection."""
+    import os, glob, time, tempfile
+    import undetected_chromedriver as uc
 
+    download_dir = tempfile.mkdtemp(prefix="rjmm_")
     BASE_URL = "https://revistamedicinamilitara.ro"
 
+    options = uc.ChromeOptions()
+    options.add_experimental_option("prefs", {
+        "download.default_directory": download_dir,
+        "download.prompt_for_download": False,
+        "plugins.always_open_pdf_externally": True,  # download instead of opening viewer
+    })
+
+    driver = uc.Chrome(options=options)
     try:
-        if _USE_CURL:
-            # curl-cffi impersonates Chrome's exact TLS fingerprint (JA3/JA4)
-            print("🔒 Using curl-cffi with Chrome TLS impersonation...")
-            session = curl_requests.Session(impersonate="chrome136")
-            session.get(BASE_URL, timeout=15)
-            time.sleep(random.uniform(1.0, 2.5))
-            print(f"📥 Downloading PDF from: {url}")
-            response = session.get(
-                url,
-                timeout=30,
-                headers={"Referer": BASE_URL + "/"},
-            )
-        else:
-            # Fallback to plain requests
-            print("⚠️  curl-cffi not installed, falling back to requests...")
-            session = requests.Session()
-            retry_strategy = Retry(
-                total=3,
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["HEAD", "GET", "OPTIONS"],
-                backoff_factor=2,
-                raise_on_status=False,
-            )
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
-            session.headers.update({
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/136.0.0.0 Safari/537.36"
-                ),
-                "Accept-Language": "ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Connection": "keep-alive",
-            })
-            session.get(BASE_URL, timeout=15)
-            time.sleep(random.uniform(1.0, 2.5))
-            print(f"📥 Downloading PDF from: {url}")
-            response = session.get(
-                url,
-                timeout=30,
-                allow_redirects=True,
-                headers={
-                    "Accept": "application/pdf,application/octet-stream,*/*;q=0.8",
-                    "Referer": BASE_URL + "/",
-                    "Sec-Fetch-Dest": "document",
-                    "Sec-Fetch-Mode": "navigate",
-                    "Sec-Fetch-Site": "same-origin",
-                },
-            )
-        response.raise_for_status()
-        
+        driver.get(BASE_URL)
+        time.sleep(1)
+        driver.get(url)
+
+        # Wait up to 30s for PDF to download
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            files = glob.glob(os.path.join(download_dir, "*.pdf"))
+            if files:
+                break
+            time.sleep(0.5)
+    finally:
+        driver.quit()
+
+    files = glob.glob(os.path.join(download_dir, "*.pdf"))
+    if not files:
+        raise RuntimeError("PDF did not download within 30 seconds")
+
+    pdf_path = max(files, key=os.path.getctime)
+    with open(pdf_path, "rb") as f:
+        data = f.read()
+    os.remove(pdf_path)
+    os.rmdir(download_dir)
+    return data
+
+
+def scrape(url: str, title_override: Optional[str] = None, issue: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Main scraping function — opens real Chrome to bypass CPGuard/ModSecurity."""
+    try:
+        print(f"📥 Downloading PDF via Chrome: {url}")
+        pdf_content = _download_pdf_via_chrome(url)
+
         print("📄 Extracting text from first page only...")
-        text = _extract_first_page_text(io.BytesIO(response.content))
+        text = _extract_first_page_text(io.BytesIO(pdf_content))
         format_detected = _detect_format(text, url)
         
         # Parse the content
