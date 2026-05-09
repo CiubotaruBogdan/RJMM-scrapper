@@ -385,7 +385,22 @@ def _affiliations_universal(text: str, format_type: str) -> List[Tuple[str, str]
                         print(f"🔧 2025 Added affiliation {num}: {content[:50]}...")
     
     else:
-        # 2026 format: affiliations appear before the Correspondence line
+        # 2026 format: affiliations appear before the Correspondence line.
+        #
+        # An affiliation can be either:
+        #   (a) on a single line:    "1  Department of X, University Y, ...; user@x.ro (UX)"
+        #   (b) split across lines, when the line wraps in the PDF and breaks the
+        #       affiliation right in the middle (typically before another author's
+        #       e-mail). Example from issue 2026/05:
+        #           1  Doctoral School, ... (AFG),
+        #           horia.blejan@drd.umfcd.ro (HB)
+        #   (c) the rare case where only the number sits alone on its own line and
+        #       the institution starts on the next line.
+        #
+        # Continuation rule: any non-empty line that does NOT start with a new
+        # affiliation number AND is not the Correspondence/Abstract/Keywords/page
+        # marker is treated as a continuation of the previous affiliation and is
+        # appended to it (separated by a single space). Blank lines are ignored.
         corr_idx = -1
         for i, line in enumerate(lines):
             if "Correspondence" in line.strip():
@@ -396,40 +411,54 @@ def _affiliations_universal(text: str, format_type: str) -> List[Tuple[str, str]
             return affs
 
         affil_lines = lines[:corr_idx]
+        num_re = re.compile(r"^\s*(\d+|[" + _SUP_RANGE + r"]+)(?:\s+(.+))?\s*$")
+        # Lines that should never be merged into an affiliation (defensive guard).
+        stop_re = re.compile(
+            r"^\s*(?:Abstract\b|Keywords?\b|Correspondence\b|Citation\b|Received\b|"
+            r"Revised\b|Accepted\b|Academic\s+Editor\b|https?://|\d{1,4}\s*$)",
+            re.I,
+        )
+
         i = 0
         while i < len(affil_lines):
             line = affil_lines[i].strip()
+            m = num_re.match(line)
+            if not m:
+                i += 1
+                continue
 
-            match = re.match(r"^\s*(\d+|[" + _SUP_RANGE + r"]+)\s+(.+)$", line)
-            if match:
-                num = match.group(1).translate(_SUP_TO_DIG)
-                content = match.group(2).strip()
-                if _looks_like_institution(content):
-                    affs.append((num, content))
-            elif re.match(r"^\s*(\d+|[" + _SUP_RANGE + r"]+)\s*$", line):
-                match = re.match(r"^\s*(\d+|[" + _SUP_RANGE + r"]+)\s*$", line)
-                num = match.group(1).translate(_SUP_TO_DIG)
-                content_lines = []
-                j = i + 1
-                while j < len(affil_lines):
-                    next_line = affil_lines[j].strip()
-                    if not next_line:
-                        j += 1
-                        continue
-                    if re.match(r"^\s*(\d+|[" + _SUP_RANGE + r"]+)", next_line):
-                        break
-                    if _looks_like_institution_continuation(next_line):
-                        content_lines.append(next_line)
+            num = m.group(1).translate(_SUP_TO_DIG)
+            parts: List[str] = []
+            if m.group(2):
+                parts.append(m.group(2).strip())
+
+            # Walk forward and absorb continuation lines until we hit either
+            # another affiliation number, a blank-line separator that is followed
+            # by a non-affiliation block, or a stop marker.
+            j = i + 1
+            while j < len(affil_lines):
+                nxt = affil_lines[j].strip()
+                if not nxt:
                     j += 1
-                if content_lines:
-                    content = " ".join(content_lines)
-                    if _looks_like_institution(content):
-                        affs.append((num, content))
-                i = j - 1
+                    continue
+                if num_re.match(nxt):
+                    break
+                if stop_re.match(nxt):
+                    break
+                # Looks like a wrapped continuation — keep it.
+                parts.append(nxt)
+                j += 1
 
-            i += 1
-    
-    # Sort affiliations by number
+            content = " ".join(parts).strip()
+            # Collapse trailing punctuation/space artefacts left from line-wrap.
+            content = re.sub(r"\s+", " ", content).rstrip(" ,;")
+
+            if content and _looks_like_institution(content):
+                affs.append((num, content))
+
+            i = j  # continue right after the absorbed block
+
+    # Sort affiliations by number (numeric)
     affs.sort(key=lambda x: int(x[0]))
     return affs
 
@@ -507,34 +536,76 @@ def _looks_like_institution_continuation(text: str) -> bool:
     
     return True
 
+# Article type label printed at the top-left of every RJMM article page,
+# e.g. "REVIEW", "ORIGINAL ARTICLE", "CASE REPORT", "CASE SERIES", "EDITORIAL".
+# Each entry maps a regex (matched against a single trimmed line) to the
+# WordPress-compatible label we want to return. Order matters: more specific
+# labels are listed first so e.g. "CASE SERIES" beats "CASE REPORT".
+_HEADER_TYPE_RULES: List[Tuple[str, str]] = [
+    (r"^(?:original\s+research|original\s+article|research\s+article)$", "Original article"),
+    (r"^(?:systematic\s+review|literature\s+review|narrative\s+review|mini[-\s]?review|review\s+article|review)$", "Review"),
+    (r"^(?:case\s+series|case\s+report|case\s+study|clinical\s+case)$", "Case Report"),
+    (r"^education\s+and\s+imaging$",                                    "Education and Imaging"),
+    (r"^short\s+communication|^brief\s+communication|^rapid\s+communication$", "Short Communication"),
+    (r"^technical\s+note$",                                             "Technical Note"),
+    (r"^clinical\s+practice$",                                          "Clinical Practice"),
+    (r"^editorial$|^editor.?s?\s+note$",                                "Editorial"),
+    (r"^letter\s+to\s+(?:the\s+)?editor$|^letter$",                     "Letter"),
+    (r"^commentary$|^perspective$|^viewpoint$",                         "Commentary"),
+]
+
+# Generic body-text fallback patterns. These are stricter than the old set:
+# bare words like "correspondence" or "letter" are NOT used here, because
+# every RJMM article contains "Correspondence: <e-mail>" and that used to
+# misclassify everything as "Letter".
+_BODY_TYPE_RULES: List[Tuple[str, str]] = [
+    (r"\bsystematic\s+review\b|\bnarrative\s+review\b|\bliterature\s+review\b|\breview\s+article\b|\bmini[-\s]?review\b", "Review"),
+    (r"\bcase\s+series\b|\bcase\s+report\b|\bclinical\s+case\b",        "Case Report"),
+    (r"\boriginal\s+article\b|\boriginal\s+research\b|\bresearch\s+article\b", "Original article"),
+    (r"\beducation\s+and\s+imaging\b",                                  "Education and Imaging"),
+    (r"\bshort\s+communication\b|\bbrief\s+communication\b|\brapid\s+communication\b", "Short Communication"),
+    (r"\btechnical\s+note\b",                                           "Technical Note"),
+    (r"\bclinical\s+practice\b",                                        "Clinical Practice"),
+    (r"\beditorial\b",                                                  "Editorial"),
+    (r"\bletter\s+to\s+(?:the\s+)?editor\b",                            "Letter"),
+    (r"\bcommentary\b|\bperspective\b|\bviewpoint\b",                   "Commentary"),
+]
+
 def _detect_article_type(text: str) -> str:
-    """Detect article type from PDF content"""
-    text_lower = text.lower()
-    
-    # Define patterns for different article types
-    patterns = {
-        "Original Research": [r"original\s+research", r"research\s+article", r"original\s+article"],
-        "Review": [r"review\s+article", r"systematic\s+review", r"literature\s+review", r"mini.?review", r"^review$"],
-        "Case Report": [r"case\s+report", r"case\s+study", r"clinical\s+case"],
-        "Clinical Practice": [r"clinical\s+practice"],
-        "Editorial": [r"editorial", r"editor.?s?\s+note"],
-        "Letter": [r"letter\s+to\s+editor", r"correspondence", r"letter"],
-        "Short Communication": [r"short\s+communication", r"brief\s+communication", r"rapid\s+communication"],
-        "Commentary": [r"commentary", r"perspective", r"viewpoint"],
-        "Technical Note": [r"technical\s+note", r"methodology", r"protocol"],
-        "Education and Imaging": [r"education\s+and\s+imaging"]
-    }
-    
-    # Check each pattern
-    for article_type, type_patterns in patterns.items():
-        for pattern in type_patterns:
-            if re.search(pattern, text_lower):
-                # WordPress mapping: convert "Original articles" (plural) to "Original article" (singular)
-                if article_type == "Original Research":
-                    return "Original article"
-                return article_type
-    
-    return "Original article"  # Default (WordPress compatible)
+    """Detect the article type printed at the top of an RJMM PDF page.
+
+    Strategy (in order):
+      1. Scan the first ~25 non-empty lines for a *line that is exactly* one of
+         the known section labels (e.g. "REVIEW", "CASE SERIES"). This is the
+         label printed in the top-left of the article in every RJMM template,
+         and is by far the most reliable signal.
+      2. If nothing is found, scan the **first page text** with stricter
+         body-text patterns. Notably we do NOT trigger "Letter" on the bare
+         word "correspondence" or "letter", because those occur in the
+         "Correspondence:" e-mail line of every article.
+      3. Default to "Original article" (WordPress compatible).
+    """
+    if not text:
+        return "Original article"
+
+    # --- 1) Header lookup (high confidence) ---------------------------------
+    header_lines = [
+        ln.strip() for ln in text.splitlines()[:60] if ln.strip()
+    ][:25]
+    for ln in header_lines:
+        ln_low = ln.lower().strip("  .:-—–")
+        for pattern, label in _HEADER_TYPE_RULES:
+            if re.match(pattern, ln_low):
+                return label
+
+    # --- 2) Body-text fallback (strict) -------------------------------------
+    text_low = text.lower()
+    for pattern, label in _BODY_TYPE_RULES:
+        if re.search(pattern, text_low):
+            return label
+
+    # --- 3) Default ---------------------------------------------------------
+    return "Original article"
 
 def _parse_issue(issue_str: str) -> Dict[str, str]:
     """Parse issue string like 'No.5 / 2025, Vol. CXXVIII, September'"""
@@ -779,95 +850,209 @@ def scrape(url: str, title_override: Optional[str] = None, issue: Optional[str] 
         traceback.print_exc()
         return None
 
-# HTML template - V6 with first page optimization badge
+# HTML template — V7: full-width two-pane layout, PDF viewer on the left,
+# parsed metadata + JSON on the right.
 HTML = """
 <!DOCTYPE html>
 <html>
-<head><title>RJMM PDF Scraper – 2025/2026</title>
+<head>
+<title>RJMM PDF Scraper – 2025/2026</title>
 <style>
-body{font-family:Arial,sans-serif;max-width:1200px;margin:0 auto;padding:20px;background-color:#f5f5f5}
-form{background:white;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);margin-bottom:20px}
-label{display:block;margin:15px 0 5px;font-weight:bold;color:#333}
-input,textarea,button{width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box}
-textarea{height:100px;resize:vertical;font-family:monospace}
-button{background-color:#007cba;color:white;border:none;cursor:pointer;margin-top:10px}
-button:hover{background-color:#005a87}
-hr{margin:30px 0;border:none;border-top:2px solid #ddd}
-#json{height:400px;background-color:#f8f9fa;font-family:monospace;font-size:12px}
-.author-row{display:flex;gap:.5rem;align-items:center}.author-row input{flex:1}.author-order{max-width:120px}
-.author-status-bullet{width:20px;height:20px;border-radius:50%;cursor:pointer;flex-shrink:0}
-.author-status-bullet.status-exists{background-color:#dc3545}
-.author-status-bullet.status-not-exists{background-color:#28a745}
-.author-number{min-width:30px;font-weight:bold;text-align:center;color:#666}
-.issue-example{font-size:0.9em;color:#666;margin-top:5px}
-.button-group{display:flex;gap:10px;margin-top:10px}
-.button-group button{margin-top:0}
-.copy-btn{background-color:#007cba;color:white;border:none;padding:5px 10px;border-radius:3px;cursor:pointer;font-size:12px;min-width:50px;height:25px}
-.copy-btn:hover{background-color:#005a87}
-.copy-btn:active{background-color:#004570}
-.corresponding-author{background-color:#fff9c4 !important}
-.author-row-corresponding{background-color:#fff9c4;border-radius:5px;padding:5px}
-.format-badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:bold;margin-left:10px}
-.format-2022{background-color:#ff6b6b;color:white}
-.format-2023{background-color:#4ecdc4;color:white}
-.format-2024{background-color:#45b7d1;color:white}
-.format-2025{background-color:#9b59b6;color:white}
-.version-badge{background-color:#e74c3c;color:white;padding:5px 10px;border-radius:15px;font-size:12px;font-weight:bold;margin-left:10px}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;padding:0}
+body{font-family:Arial,sans-serif;background-color:#f5f5f5;color:#222}
+
+/* Top bar */
+.topbar{display:flex;align-items:center;gap:1rem;padding:.6rem 1rem;background:#fff;border-bottom:1px solid #e3e3e3;box-shadow:0 1px 2px rgba(0,0,0,.04);position:sticky;top:0;z-index:10}
+.topbar h1{font-size:1.05rem;margin:0;color:#333;white-space:nowrap}
+.topbar form{flex:1;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin:0}
+.topbar input[type=text]{flex:1;min-width:240px;padding:.45rem .6rem;border:1px solid #ccc;border-radius:4px;font-size:.85rem}
+.topbar button{background:#007cba;color:#fff;border:none;padding:.5rem .9rem;border-radius:4px;cursor:pointer;font-size:.85rem;white-space:nowrap}
+.topbar button:hover{background:#005a87}
+.topbar .secondary{background:#6c757d}
+.topbar .secondary:hover{background:#545b62}
+.version-badge{background:#e74c3c;color:#fff;padding:.15rem .6rem;border-radius:12px;font-size:.7rem;font-weight:bold}
+.format-badge{display:inline-block;padding:.15rem .6rem;border-radius:10px;font-size:.7rem;font-weight:bold;color:#fff;margin-left:.4rem}
+.format-2022{background:#ff6b6b}.format-2023{background:#4ecdc4}.format-2024{background:#45b7d1}
+.format-2025{background:#9b59b6}.format-2026{background:#16a085}
+
+/* 2-pane layout: form on the LEFT, PDF on the RIGHT */
+.split{display:flex;height:calc(100vh - 56px);width:100%}
+.pane{height:100%;overflow:auto}
+.pane-left{flex:0 0 45%;padding:0 1.1rem 4rem;background:#f5f5f5;border-right:1px solid #d0d0d0}
+.pane-right.pdf-pane{flex:1;background:#222;display:flex;align-items:stretch;justify-content:center}
+.pane-right.pdf-pane iframe,.pane-right.pdf-pane embed{width:100%;height:100%;border:0;background:#222}
+.pane-right.pdf-pane .placeholder{color:#bbb;font-size:.95rem;align-self:center;text-align:center;padding:2rem}
+
+/* Sticky quick-copy toolbar at the top of the form pane */
+.toolbar{position:sticky;top:0;z-index:5;background:#fff;border:1px solid #e3e3e3;border-radius:6px;
+  padding:.5rem .65rem;margin:.6rem 0 .9rem;display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;
+  box-shadow:0 2px 4px rgba(0,0,0,.06)}
+.toolbar strong{font-size:.78rem;color:#555;margin-right:.25rem}
+.toolbar button{background:#007cba;color:#fff;border:none;padding:.35rem .65rem;border-radius:4px;
+  cursor:pointer;font-size:.74rem;line-height:1.1}
+.toolbar button:hover{background:#005a87}
+.toolbar button.copied{background:#28a745}
+
+/* Resizer */
+.resizer{flex:0 0 6px;cursor:col-resize;background:#d6d6d6;position:relative}
+.resizer:hover{background:#bdbdbd}
+.resizer::before{content:"";position:absolute;top:50%;left:50%;width:2px;height:32px;background:#888;transform:translate(-50%,-50%);border-radius:2px}
+
+/* Form fields on the right pane */
+label{display:block;margin:.7rem 0 .25rem;font-weight:bold;color:#333;font-size:.82rem}
+input[type=text],input:not([type]),textarea{width:100%;padding:.5rem .6rem;border:1px solid #ddd;border-radius:4px;font-size:.85rem;font-family:inherit;background:#fff}
+textarea{min-height:90px;resize:vertical;font-family:ui-monospace,Consolas,monospace}
+#json{min-height:280px;background:#fafafa;font-family:ui-monospace,Consolas,monospace;font-size:.78rem}
+.section{background:#fff;padding:.8rem 1rem;border-radius:6px;box-shadow:0 1px 2px rgba(0,0,0,.05);margin-bottom:1rem}
+.section h3{margin:0 0 .4rem;font-size:.95rem;color:#444}
+.button-group{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem}
+.button-group button{margin:0;background:#007cba;color:#fff;border:none;padding:.45rem .8rem;border-radius:4px;cursor:pointer;font-size:.8rem}
+.button-group button:hover{background:#005a87}
+
+/* Authors */
+.author-row{display:flex;gap:.5rem;align-items:center;margin-bottom:.35rem}
+.author-row input{flex:1}
+.author-order{max-width:110px}
+.author-status-bullet{width:18px;height:18px;border-radius:50%;cursor:pointer;flex-shrink:0}
+.author-status-bullet.status-exists{background:#dc3545}
+.author-status-bullet.status-not-exists{background:#28a745}
+.author-number{min-width:24px;font-weight:bold;text-align:center;color:#666;font-size:.8rem}
+.copy-btn{background:#007cba;color:#fff;border:none;padding:.25rem .55rem;border-radius:3px;cursor:pointer;font-size:.72rem;min-width:48px;height:26px}
+.copy-btn:hover{background:#005a87}
+.corresponding-author{background:#fff9c4 !important}
+.author-row-corresponding{background:#fff9c4;border-radius:4px;padding:.25rem .35rem}
+
+/* Mobile / narrow viewports: stack panes (form first, PDF below) */
+@media (max-width: 900px){
+  .split{flex-direction:column;height:auto}
+  .pane-left{flex:0 0 auto;width:100%;border-right:0;border-bottom:1px solid #d0d0d0}
+  .pane-right.pdf-pane{flex:0 0 70vh;width:100%}
+  .resizer{display:none}
+  .toolbar{position:static}
+}
 </style>
 </head>
 <body>
-<h1>RJMM PDF Scraper <span class="version-badge">2025 / 2026</span></h1>
 
-<form method="post">
-  <label>PDF URL *</label>
-  <input name="url" value="{{url or ''}}" required>
-  <label>Title override (optional)</label>
-  <input name="title_override" value="{{override or ''}}" placeholder="Paste exact title if detection fails">
-  <label>Issue (optional)</label>
-  <input name="issue" value="{{issue or ''}}" placeholder="e.g., No.5 / 2025, Vol. CXXVIII, September">
-  <div class="issue-example">Examples: No.5 / 2025, Vol. CXXVIII, September | No.6 / 2024, Vol. CXXVII, November</div>
-  <button type="submit">Scrape</button>
-  {% if data %}
-  <div class="button-group">
-    <button type="button" id="copyJSON">Copy Full JSON</button>
-    <button type="button" id="copyAffiliations">Copy Affiliations JSON</button>
+<div class="topbar">
+  <h1>RJMM PDF Scraper <span class="version-badge">2025 / 2026</span></h1>
+  <form method="post" id="scrapeForm">
+    <input type="text" name="url" value="{{url or ''}}" placeholder="PDF URL *" required>
+    <input type="text" name="title_override" value="{{override or ''}}" placeholder="Title override (optional)">
+    <input type="text" name="issue" value="{{issue or ''}}" placeholder="Issue (e.g. No.5 / 2025, Vol. CXXVIII, September)">
+    <button type="submit">Scrape</button>
+    {% if url %}<button type="button" class="secondary" onclick="location.href='/'">Reset</button>{% endif %}
+  </form>
+</div>
+
+<div class="split" id="split">
+
+  <!-- LEFT pane: parsed metadata + form -->
+  <div class="pane pane-left" id="paneLeft">
+    {% if data %}
+      <div class="toolbar">
+        <strong>Quick copy:</strong>
+        <button type="button" id="copyJSON">Copy Full JSON</button>
+        <button type="button" id="copyAffiliations">Copy Affiliations JSON</button>
+        <button type="button" id="copyTitle">Copy Title</button>
+        <button type="button" id="copyDOI">Copy DOI</button>
+        <button type="button" id="copyAbstract">Copy Abstract</button>
+        <button type="button" id="copyKeywords">Copy Keywords</button>
+        <button type="button" id="copyEmail">Copy Corresp. e-mail</button>
+      </div>
+      <div class="section">
+        <h3>Article
+          {% if data.format_detected %}
+            <span class="format-badge format-{{data.format_detected}}">{{data.format_detected.upper()}}</span>
+          {% endif %}
+        </h3>
+        <label>Title</label><input id="fld_title" readonly onclick="cp(this)" value="{{data.title}}">
+        <label>DOI</label><input id="fld_doi" readonly onclick="cp(this)" value="{{data.doi}}">
+        <label>Article Type</label><input id="fld_type" readonly onclick="cp(this)" value="{{data.article_type}}">
+        {% if data.issue %}<label>Issue</label><input readonly onclick="cp(this)" value="{{data.issue}}">{% endif %}
+        {% if data.year %}<label>Year</label><input readonly onclick="cp(this)" value="{{data.year}}">{% endif %}
+      </div>
+
+      <div class="section">
+        <h3>Authors</h3>
+        <label>Authors (full line)</label>
+        <textarea readonly onclick="cp(this)">{{data.authors_full}}</textarea>
+        <label>Authors (table)</label>
+        {% for a in data.authors %}
+        <div class="author-row {% if a.name in (data.correspondence_full or '') %}author-row-corresponding{% endif %}">
+          <div class="author-status-bullet {% if a.exists %}status-exists{% else %}status-not-exists{% endif %}" onclick="cp(this)"
+               title="{% if a.exists %}Author exists (RED){% else %}Author not found (GREEN){% endif %}"></div>
+          <button class="copy-btn" onclick="copyAuthorJSON('{{a.name}}', '{{data.correspondence_email if a.name in (data.correspondence_full or '') else ''}}', '{{a.orders}}', {{loop.index}})">Copy</button>
+          <div class="author-number">{{loop.index}}.</div>
+          <input readonly onclick="cp(this)" value="{{a.name}}" {% if a.name in (data.correspondence_full or '') %}class="corresponding-author"{% endif %}>
+          <input class="author-order" readonly onclick="cp(this)" value="{{a.orders}}">
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="section">
+        <h3>Correspondence</h3>
+        <label>E-mail</label><input id="fld_email" readonly onclick="cp(this)" value="{{data.correspondence_email}}">
+        <label>Full</label><textarea readonly onclick="cp(this)">{{data.correspondence_full}}</textarea>
+      </div>
+
+      <div class="section">
+        <h3>Affiliations</h3>
+        {% if data.affiliations %}
+          {% for aff in data.affiliations %}
+            <label>Affiliation {{aff[0]}}</label>
+            <textarea readonly onclick="cp(this)" style="min-height:54px">{{aff[1]}}</textarea>
+          {% endfor %}
+        {% else %}
+          <em style="color:#999">No affiliations detected.</em>
+        {% endif %}
+      </div>
+
+      <div class="section">
+        <h3>Abstract & Keywords</h3>
+        <label>Abstract</label><textarea id="fld_abstract" readonly onclick="cp(this)" style="min-height:160px">{{data.abstract}}</textarea>
+        <label>Keywords</label><input id="fld_keywords" readonly onclick="cp(this)" value="{{data.keywords}}">
+      </div>
+
+      <div class="section">
+        <h3>Editorial dates</h3>
+        <label>Received</label><input readonly onclick="cp(this)" value="{{data.received_date}}">
+        <label>Revised</label><input readonly onclick="cp(this)" value="{{data.revised_date}}">
+        <label>Accepted</label><input readonly onclick="cp(this)" value="{{data.accepted_date}}">
+        <label>Academic Editor</label><input readonly onclick="cp(this)" value="{{data.academic_editor}}">
+      </div>
+
+      <div class="section">
+        <h3>JSON</h3>
+        <textarea id="json" readonly onclick="cp(this)">{{data|tojson(indent=2)}}</textarea>
+      </div>
+
+    {% else %}
+      <div class="section">
+        <p style="color:#666;margin:0">
+          No article scraped yet. Paste the PDF URL in the top bar and press <b>Scrape</b>.<br>
+          The PDF will load on the right so you can verify the parsed fields side by side.
+        </p>
+      </div>
+    {% endif %}
   </div>
-  {% endif %}
-</form>
 
-{% if data %}
-<hr>
-{% if data.format_detected %}
-<label>Detected Format <span class="format-badge format-{{data.format_detected}}">{{data.format_detected.upper()}}</span></label>
-{% endif %}
-<label>Title</label><input readonly onclick="cp(this)" value="{{data.title}}">
-<label>Authors (full line)</label><textarea readonly onclick="cp(this)">{{data.authors_full}}</textarea>
-<label>Authors (table)</label>
-{% for a in data.authors %}
-<div class="author-row {% if a.name in (data.correspondence_full or '') %}author-row-corresponding{% endif %}">
-  <div class="author-status-bullet {% if a.exists %}status-exists{% else %}status-not-exists{% endif %}" onclick="cp(this)" title="{% if a.exists %}Author exists (RED){% else %}Author not found (GREEN){% endif %}"></div>
-  <button class="copy-btn" onclick="copyAuthorJSON('{{a.name}}', '{{data.correspondence_email if a.name in (data.correspondence_full or '') else ''}}', '{{a.orders}}', {{loop.index}})">Copy</button>
-  <div class="author-number">{{loop.index}}.</div>
-  <input readonly onclick="cp(this)" value="{{a.name}}" {% if a.name in (data.correspondence_full or '') %}class="corresponding-author"{% endif %}>
-  <input class="author-order" readonly onclick="cp(this)" value="{{a.orders}}">
-</div>{% endfor %}
-<label>Correspondence e‑mail</label><input readonly onclick="cp(this)" value="{{data.correspondence_email}}">
-<label>Correspondence (full)</label><textarea readonly onclick="cp(this)">{{data.correspondence_full}}</textarea>
-{% for aff in data.affiliations %}<label>Affiliation {{aff[0]}}</label><input readonly onclick="cp(this)" value="{{aff[1]}}">{% endfor %}
-<label>DOI</label><input readonly onclick="cp(this)" value="{{data.doi}}">
-<label>Abstract</label><textarea readonly onclick="cp(this)">{{data.abstract}}</textarea>
-<label>Received</label><input readonly onclick="cp(this)" value="{{data.received_date}}">
-<label>Revised</label><input readonly onclick="cp(this)" value="{{data.revised_date}}">
-<label>Accepted</label><input readonly onclick="cp(this)" value="{{data.accepted_date}}">
-<label>Academic Editor</label><input readonly onclick="cp(this)" value="{{data.academic_editor}}">
-<label>Keywords</label><input readonly onclick="cp(this)" value="{{data.keywords}}">
-<label>Article Type</label><input readonly onclick="cp(this)" value="{{data.article_type}}">
-{% if data.issue %}<label>Issue</label><input readonly onclick="cp(this)" value="{{data.issue}}">{% endif %}
-{% if data.year %}<label>Year</label><input readonly onclick="cp(this)" value="{{data.year}}">{% endif %}
+  <div class="resizer" id="resizer" title="Drag to resize"></div>
 
-<h3>JSON</h3>
-<textarea id="json" readonly onclick="cp(this)">{{data|tojson(indent=2)}}</textarea>
-{% endif %}
+  <!-- RIGHT pane: PDF viewer -->
+  <div class="pane pane-right pdf-pane" id="paneRight">
+    {% if url %}
+      <iframe id="pdfFrame" src="{{url}}#view=FitH" title="PDF preview"></iframe>
+    {% else %}
+      <div class="placeholder">
+        Paste a PDF URL above and click <b>Scrape</b>.<br>
+        The PDF will appear here for side-by-side review.
+      </div>
+    {% endif %}
+  </div>
+
+</div>
 
 <script>
 function cp(el){
@@ -940,20 +1125,74 @@ function showCopyError(button, jsonString, message) {
   alert('Copy failed! Here is the JSON to copy manually:\\n\\n' + jsonString);
 }
 
+/* --- Resizable split between PDF viewer and form pane --- */
+(function(){
+  const split = document.getElementById('split');
+  const left  = document.getElementById('paneLeft');
+  const bar   = document.getElementById('resizer');
+  if (!split || !left || !bar) return;
+
+  // Restore saved width (% of viewport).
+  const saved = parseFloat(localStorage.getItem('rjmm_left_pct'));
+  if (!isNaN(saved) && saved > 20 && saved < 85) {
+    left.style.flex = '0 0 ' + saved + '%';
+  }
+
+  let dragging = false;
+  bar.addEventListener('mousedown', e => {
+    dragging = true;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const rect = split.getBoundingClientRect();
+    let pct = ((e.clientX - rect.left) / rect.width) * 100;
+    if (pct < 20) pct = 20;
+    if (pct > 85) pct = 85;
+    left.style.flex = '0 0 ' + pct + '%';
+  });
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    const rect = split.getBoundingClientRect();
+    const lrect = left.getBoundingClientRect();
+    const pct = (lrect.width / rect.width) * 100;
+    localStorage.setItem('rjmm_left_pct', pct.toFixed(2));
+  });
+})();
+
 {% if data %}
 localStorage.setItem('article_meta', JSON.stringify({{data|tojson}}));
 
-document.getElementById('copyJSON').onclick=e=>{
-  e.preventDefault();navigator.clipboard.writeText(document.getElementById('json').value)
-    .then(()=>alert('Full JSON copied ✔'));
-};
+function _flash(btn, label){
+  if(!btn) return;
+  const orig = btn.textContent;
+  btn.classList.add('copied');
+  btn.textContent = label || (orig + ' ✔');
+  setTimeout(()=>{ btn.classList.remove('copied'); btn.textContent = orig; }, 1100);
+}
+function _bindCopy(id, getValue){
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  btn.onclick = e => {
+    e.preventDefault();
+    const v = (typeof getValue === 'function') ? getValue() : getValue;
+    if (v == null) return;
+    navigator.clipboard.writeText(String(v)).then(()=>_flash(btn));
+  };
+}
 
-document.getElementById('copyAffiliations').onclick=e=>{
-  e.preventDefault();
-  const affiliationsOnly = {{data.affiliations|tojson}};
-  navigator.clipboard.writeText(JSON.stringify(affiliationsOnly))
-    .then(()=>alert('Affiliations JSON copied ✔'));
-};
+_bindCopy('copyJSON',         () => document.getElementById('json').value);
+_bindCopy('copyAffiliations', () => JSON.stringify({{data.affiliations|tojson}}));
+_bindCopy('copyTitle',        () => document.getElementById('fld_title')?.value || '');
+_bindCopy('copyDOI',          () => document.getElementById('fld_doi')?.value || '');
+_bindCopy('copyAbstract',     () => document.getElementById('fld_abstract')?.value || '');
+_bindCopy('copyKeywords',     () => document.getElementById('fld_keywords')?.value || '');
+_bindCopy('copyEmail',        () => document.getElementById('fld_email')?.value || '');
 {% endif %}
 </script>
 </body>
