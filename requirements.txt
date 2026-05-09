@@ -1,5 +1,5 @@
 pdfminer.six==20250506
 flask==3.0.3
 requests==2.32.3
-curl-cffi>=0.7.0
+undetected-chromedriver>=3.5.0
 
