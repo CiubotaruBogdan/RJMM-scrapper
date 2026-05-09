@@ -607,46 +607,67 @@ def _parse_page1_universal(txt: str, format_detected: str, override: Optional[st
     return data
 
 def scrape(url: str, title_override: Optional[str] = None, issue: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Main scraping function - V6 OPTIMIZED FOR FIRST PAGE ONLY"""
+    """Main scraping function."""
+    import random, time
+
+    BASE_URL = "https://revistamedicinamilitara.ro"
+
+    session = requests.Session()
+
+    retry_strategy = Retry(
+        total=3,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "OPTIONS"],
+        backoff_factor=2,
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+
+    # Realistic browser headers — Chrome 124 on Windows
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "DNT": "1",
+    })
+
     try:
-        print(f"📥 Downloading PDF from: {url}")
-        
-        # Download PDF with proper headers and retry logic
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'application/pdf,application/octet-stream,*/*',
-            'Accept-Language': 'en-US,en;q=0.9,ro;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Cache-Control': 'max-age=0'
-        }
-        
-        # Create session with retry strategy
-        session = requests.Session()
-        
-        # Configure retry strategy
-        retry_strategy = Retry(
-            total=5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["HEAD", "GET", "OPTIONS"],
-            backoff_factor=3,
-            raise_on_status=False
+        # Warm-up: visit the homepage first to get cookies and establish session
+        print(f"🌐 Warming up session on {BASE_URL}...")
+        session.get(
+            BASE_URL,
+            timeout=15,
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Upgrade-Insecure-Requests": "1",
+            },
         )
-        
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
-        
-        # Set headers for session
-        session.headers.update(headers)
-        
-        print(f"🔄 Downloading with anti-bot protection...")
-        
-        response = session.get(url, timeout=30, allow_redirects=True)
+        time.sleep(random.uniform(1.0, 2.5))
+
+        print(f"📥 Downloading PDF from: {url}")
+        response = session.get(
+            url,
+            timeout=30,
+            allow_redirects=True,
+            headers={
+                "Accept": "application/pdf,application/octet-stream,*/*;q=0.8",
+                "Referer": BASE_URL + "/",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "same-origin",
+                "Upgrade-Insecure-Requests": "1",
+            },
+        )
         response.raise_for_status()
         
         print("📄 Extracting text from first page only...")
