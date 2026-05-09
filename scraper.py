@@ -6,6 +6,8 @@ import unicodedata
 from typing import Dict, Any, List, Optional, Tuple
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from flask import Flask, render_template_string, request
 from pdfminer.high_level import extract_text
 from pdfminer.layout import LAParams
@@ -604,63 +606,75 @@ def _parse_page1_universal(txt: str, format_detected: str, override: Optional[st
 
     return data
 
-def _download_pdf_bytes(url: str) -> bytes:
-    """Download PDF using a real Chromium browser via Playwright."""
-    from playwright.sync_api import sync_playwright
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            locale="ro-RO",
-            accept_downloads=True,
-        )
-        page = context.new_page()
-
-        pdf_bytes: list[bytes] = []
-
-        def handle_response(response):
-            ct = response.headers.get("content-type", "")
-            if "pdf" in ct or url in response.url:
-                try:
-                    pdf_bytes.append(response.body())
-                except Exception:
-                    pass
-
-        page.on("response", handle_response)
-
-        # Navigate to the homepage first (establishes cookies/session)
-        page.goto("https://revistamedicinamilitara.ro", wait_until="domcontentloaded", timeout=15000)
-        page.wait_for_timeout(1000)
-
-        # Now navigate to the PDF — Playwright handles TLS and JS fingerprinting
-        with context.expect_page() as _:
-            pass
-        page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(500)
-
-        browser.close()
-
-        if not pdf_bytes:
-            raise RuntimeError("PDF not captured in network responses")
-
-        return pdf_bytes[-1]
-
-
 def scrape(url: str, title_override: Optional[str] = None, issue: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Main scraping function — uses Playwright to bypass bot detection."""
+    """Main scraping function."""
+    import random, time
+
+    BASE_URL = "https://revistamedicinamilitara.ro"
+
+    session = requests.Session()
+
+    retry_strategy = Retry(
+        total=3,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "OPTIONS"],
+        backoff_factor=2,
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+
+    # Realistic browser headers — Chrome 124 on Windows
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "DNT": "1",
+    })
+
     try:
+        # Warm-up: visit the homepage first to get cookies and establish session
+        print(f"🌐 Warming up session on {BASE_URL}...")
+        session.get(
+            BASE_URL,
+            timeout=15,
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Upgrade-Insecure-Requests": "1",
+            },
+        )
+        time.sleep(random.uniform(1.0, 2.5))
+
         print(f"📥 Downloading PDF from: {url}")
-        pdf_content = _download_pdf_bytes(url)
-
+        response = session.get(
+            url,
+            timeout=30,
+            allow_redirects=True,
+            headers={
+                "Accept": "application/pdf,application/octet-stream,*/*;q=0.8",
+                "Referer": BASE_URL + "/",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "same-origin",
+                "Upgrade-Insecure-Requests": "1",
+            },
+        )
+        response.raise_for_status()
+        
         print("📄 Extracting text from first page only...")
-        text = _extract_first_page_text(io.BytesIO(pdf_content))
+        text = _extract_first_page_text(io.BytesIO(response.content))
         format_detected = _detect_format(text, url)
-
+        
+        # Parse the content
         print("🔍 Parsing PDF content...")
         data = _parse_page1_universal(text, format_detected, title_override)
         
