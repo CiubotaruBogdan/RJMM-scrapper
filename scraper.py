@@ -9,6 +9,11 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from flask import Flask, render_template_string, request
+try:
+    from curl_cffi import requests as curl_requests
+    _USE_CURL = True
+except ImportError:
+    _USE_CURL = False
 from pdfminer.high_level import extract_text
 from pdfminer.layout import LAParams
 
@@ -612,62 +617,58 @@ def scrape(url: str, title_override: Optional[str] = None, issue: Optional[str] 
 
     BASE_URL = "https://revistamedicinamilitara.ro"
 
-    session = requests.Session()
-
-    retry_strategy = Retry(
-        total=3,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["HEAD", "GET", "OPTIONS"],
-        backoff_factor=2,
-        raise_on_status=False,
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-
-    # Realistic browser headers — Chrome 136 on Windows
-    session.headers.update({
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/136.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "DNT": "1",
-    })
-
     try:
-        # Warm-up: visit the homepage first to get cookies and establish session
-        print(f"🌐 Warming up session on {BASE_URL}...")
-        session.get(
-            BASE_URL,
-            timeout=15,
-            headers={
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Upgrade-Insecure-Requests": "1",
-            },
-        )
-        time.sleep(random.uniform(1.0, 2.5))
-
-        print(f"📥 Downloading PDF from: {url}")
-        response = session.get(
-            url,
-            timeout=30,
-            allow_redirects=True,
-            headers={
-                "Accept": "application/pdf,application/octet-stream,*/*;q=0.8",
-                "Referer": BASE_URL + "/",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "same-origin",
-                "Upgrade-Insecure-Requests": "1",
-            },
-        )
+        if _USE_CURL:
+            # curl-cffi impersonates Chrome's exact TLS fingerprint (JA3/JA4)
+            print("🔒 Using curl-cffi with Chrome TLS impersonation...")
+            session = curl_requests.Session(impersonate="chrome136")
+            session.get(BASE_URL, timeout=15)
+            time.sleep(random.uniform(1.0, 2.5))
+            print(f"📥 Downloading PDF from: {url}")
+            response = session.get(
+                url,
+                timeout=30,
+                headers={"Referer": BASE_URL + "/"},
+            )
+        else:
+            # Fallback to plain requests
+            print("⚠️  curl-cffi not installed, falling back to requests...")
+            session = requests.Session()
+            retry_strategy = Retry(
+                total=3,
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["HEAD", "GET", "OPTIONS"],
+                backoff_factor=2,
+                raise_on_status=False,
+            )
+            adapter = HTTPAdapter(max_retries=retry_strategy)
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
+            session.headers.update({
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/136.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+            })
+            session.get(BASE_URL, timeout=15)
+            time.sleep(random.uniform(1.0, 2.5))
+            print(f"📥 Downloading PDF from: {url}")
+            response = session.get(
+                url,
+                timeout=30,
+                allow_redirects=True,
+                headers={
+                    "Accept": "application/pdf,application/octet-stream,*/*;q=0.8",
+                    "Referer": BASE_URL + "/",
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "same-origin",
+                },
+            )
         response.raise_for_status()
         
         print("📄 Extracting text from first page only...")
