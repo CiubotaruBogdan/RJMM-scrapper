@@ -625,12 +625,12 @@ def scrape(url: str, title_override: Optional[str] = None, issue: Optional[str] 
     session.mount("http://", adapter)
     session.mount("https://", adapter)
 
-    # Realistic browser headers — Chrome 124 on Windows
+    # Realistic browser headers — Chrome 136 on Windows
     session.headers.update({
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
+            "Chrome/136.0.0.0 Safari/537.36"
         ),
         "Accept-Language": "ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7",
         "Accept-Encoding": "gzip, deflate, br",
