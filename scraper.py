@@ -2,8 +2,10 @@
 
 import io
 import re
+import time
 import unicodedata
 from typing import Dict, Any, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -13,6 +15,68 @@ from pdfminer.high_level import extract_text
 from pdfminer.layout import LAParams
 
 app = Flask(__name__)
+
+# ---------------------------------------------------------------------------
+# HTTP session that looks like a real desktop Chrome browser.
+#
+# The cPanel/cpGuard rule "User-Agent associated with scripting/generic HTTP
+# client" closes the TLS connection (SSLZeroReturnError / `unexpected eof while
+# reading`) for any request that uses the default `python-requests/x.y` UA, an
+# empty UA, or other obviously non-browser identifiers. A plain Chrome UA is
+# enough to be allowed through, but we send the full set of headers a real
+# Chrome would send so the request is indistinguishable from a normal visitor.
+# ---------------------------------------------------------------------------
+
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
+_BROWSER_HEADERS = {
+    "User-Agent": _BROWSER_UA,
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8,"
+        "application/signed-exchange;v=b3;q=0.7"
+    ),
+    "Accept-Language": "en-US,en;q=0.9,ro;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-User": "?1",
+    "Sec-Fetch-Dest": "document",
+    "sec-ch-ua": (
+        '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"'
+    ),
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "Connection": "keep-alive",
+}
+
+
+def _build_session() -> requests.Session:
+    """Return a requests Session pre-configured to look like Chrome and retry."""
+    s = requests.Session()
+    s.headers.update(_BROWSER_HEADERS)
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        backoff_factor=1.5,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET", "HEAD"]),
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=4)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    return s
+
+
+# Single shared session — keeps cookies (e.g. cpGuard challenge cookies) and
+# warmed-up TLS connections across all requests in the process.
+SESSION = _build_session()
 
 # Superscript to digit mapping
 _SUP_RANGE = "⁰¹²³⁴⁵⁶⁷⁸⁹"
@@ -45,13 +109,22 @@ def _normalize_author_name(author_name: str) -> str:
     return name
 
 def _check_author_exists(author_name: str) -> bool:
-    """Check if author exists on the website with proper diacritics normalization"""
+    """Check if author exists on the website with proper diacritics normalization.
+
+    Uses the shared browser-like SESSION so cpGuard does not block the request
+    based on a `python-requests` User-Agent.
+    """
     slug = _normalize_author_name(author_name)
     url = f"https://revistamedicinamilitara.ro/article-author/{slug}/"
     try:
-        response = requests.head(url)
+        # Some hosts behind cpGuard react badly to HEAD; fall back to a tiny GET.
+        response = SESSION.head(url, allow_redirects=True, timeout=15)
+        if response.status_code in (405, 403):
+            response = SESSION.get(url, allow_redirects=True, timeout=15, stream=True)
+            response.close()
         return response.status_code != 404
-    except:
+    except Exception as e:
+        print(f"⚠️  author existence check failed for '{author_name}': {e}")
         return False
 
 def _split_authors(authors_full: str) -> list[dict[str, str]]:
@@ -606,54 +679,79 @@ def _parse_page1_universal(txt: str, format_detected: str, override: Optional[st
 
     return data
 
-def _download_pdf_via_chrome(url: str) -> bytes:
-    """Download PDF by opening real Chrome — bypasses all bot detection."""
-    import os, glob, time, tempfile
-    import undetected_chromedriver as uc
+def _warm_up(session: requests.Session, base_url: str) -> None:
+    """Visit the homepage once so cpGuard sees a normal browsing flow.
 
-    download_dir = tempfile.mkdtemp(prefix="rjmm_")
-    BASE_URL = "https://revistamedicinamilitara.ro"
-
-    options = uc.ChromeOptions()
-    options.add_experimental_option("prefs", {
-        "download.default_directory": download_dir,
-        "download.prompt_for_download": False,
-        "plugins.always_open_pdf_externally": True,  # download instead of opening viewer
-    })
-
-    driver = uc.Chrome(options=options)
+    This collects any session cookies the WAF wants to set and primes the
+    keep-alive connection. Failures are non-fatal — the actual PDF GET below
+    works on its own with the browser headers.
+    """
     try:
-        driver.get(BASE_URL)
-        time.sleep(1)
-        driver.get(url)
+        r = session.get(base_url, timeout=15, allow_redirects=True)
+        # Some servers return huge HTML; we don't need the body.
+        r.close()
+    except Exception as e:
+        print(f"⚠️  warm-up to {base_url} failed (non-fatal): {e}")
 
-        # Wait up to 30s for PDF to download
-        deadline = time.time() + 30
-        while time.time() < deadline:
-            files = glob.glob(os.path.join(download_dir, "*.pdf"))
-            if files:
-                break
-            time.sleep(0.5)
-    finally:
-        driver.quit()
 
-    files = glob.glob(os.path.join(download_dir, "*.pdf"))
-    if not files:
-        raise RuntimeError("PDF did not download within 30 seconds")
+def _download_pdf(url: str) -> bytes:
+    """Download a PDF using a browser-like requests session.
 
-    pdf_path = max(files, key=os.path.getctime)
-    with open(pdf_path, "rb") as f:
-        data = f.read()
-    os.remove(pdf_path)
-    os.rmdir(download_dir)
-    return data
+    cpGuard on revistamedicinamilitara.ro blocks requests whose User-Agent
+    looks like a script (e.g. `python-requests/...`, empty UA, `curl/...`)
+    by closing the TLS handshake. Sending a realistic Chrome User-Agent and
+    matching headers makes the request indistinguishable from a normal visit
+    and the server returns the PDF directly — no headless browser needed.
+    """
+    parsed = urlparse(url)
+    base_url = f"{parsed.scheme}://{parsed.netloc}/"
+
+    # First request from this process: warm up so we look like a user that
+    # arrived from the homepage. Subsequent calls reuse the cookie jar.
+    if not SESSION.cookies:
+        _warm_up(SESSION, base_url)
+        # Tiny pause so the request rate doesn't look automated.
+        time.sleep(0.5)
+
+    headers = {
+        # PDFs need a slightly different Accept / Sec-Fetch profile than HTML.
+        "Accept": "application/pdf,application/octet-stream,*/*;q=0.8",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Dest": "document",
+        "Referer": base_url,
+    }
+
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, 4):
+        try:
+            resp = SESSION.get(url, headers=headers, timeout=30, allow_redirects=True)
+            resp.raise_for_status()
+            ctype = (resp.headers.get("content-type") or "").lower()
+            if "pdf" not in ctype and not resp.content.startswith(b"%PDF"):
+                raise RuntimeError(
+                    f"unexpected content-type {ctype!r} (size={len(resp.content)}) "
+                    f"— server may have served an HTML challenge page"
+                )
+            return resp.content
+        except Exception as e:
+            last_exc = e
+            print(f"⚠️  PDF download attempt {attempt}/3 failed: {e}")
+            time.sleep(1.5 * attempt)
+
+    raise RuntimeError(f"failed to download PDF from {url}: {last_exc}")
 
 
 def scrape(url: str, title_override: Optional[str] = None, issue: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Main scraping function — opens real Chrome to bypass CPGuard/ModSecurity."""
+    """Main scraping function.
+
+    Uses a browser-like requests session to bypass the cpGuard / ModSecurity
+    rule that blocks generic HTTP-client User-Agents. No headless browser is
+    required for revistamedicinamilitara.ro.
+    """
     try:
-        print(f"📥 Downloading PDF via Chrome: {url}")
-        pdf_content = _download_pdf_via_chrome(url)
+        print(f"📥 Downloading PDF: {url}")
+        pdf_content = _download_pdf(url)
 
         print("📄 Extracting text from first page only...")
         text = _extract_first_page_text(io.BytesIO(pdf_content))

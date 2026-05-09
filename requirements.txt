@@ -1,5 +1,8 @@
 pdfminer.six==20250506
 flask==3.0.3
 requests==2.32.3
-undetected-chromedriver>=3.5.0
+urllib3>=2.0.0
+# `undetected-chromedriver` is no longer needed: cpGuard only blocks based on
+# the User-Agent string, so a regular `requests` session with a Chrome UA and
+# matching headers is enough to download PDFs from revistamedicinamilitara.ro.
 
